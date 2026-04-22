@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "碧虎远程桌面"
+    },
+    {
+      "name": "module_desc",
+      "value": "FreeRDP Harmony client shell"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Entry ability for FreeRDP Harmony"
+    }
+  ]
+}
