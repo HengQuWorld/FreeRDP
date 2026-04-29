@@ -3,7 +3,7 @@
     "bundleName": "com.hengqutiandi.rdpclient",
     "icon": "$media:layered_image",
     "label": "$string:app_name",
-    "vendor": "gaord",
+    "vendor": "横渠天地（北京）科技有限公司",
     "versionCode": 1,
     "versionName": "1.0.0"
   }
