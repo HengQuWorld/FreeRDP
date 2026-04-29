@@ -33,6 +33,17 @@
         ],
         "startWindowIcon": "$media:layered_image",
         "startWindowBackground": "$color:start_window_background"
+      },
+      {
+        "name": "SessionAbility",
+        "srcEntry": "./ets/entryability/SessionAbility.ets",
+        "description": "$string:SessionAbility_desc",
+        "icon": "$media:layered_image",
+        "label": "$string:session_ability_label",
+        "exported": false,
+        "launchType": "standard",
+        "startWindowIcon": "$media:layered_image",
+        "startWindowBackground": "$color:start_window_background"
       }
     ],
     "requestPermissions": [

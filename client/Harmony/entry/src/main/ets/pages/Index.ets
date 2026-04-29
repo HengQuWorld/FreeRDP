@@ -1,14 +1,22 @@
 import { ConnectionForm } from '../components/ConnectionForm';
 import { BookmarkList } from '../components/BookmarkList';
 import { HomeViewModel } from '../viewmodel/HomeViewModel';
+import { SessionRecord } from '../service/SessionManager';
+import { sessionManager } from '../service/SessionManager';
+import { sessionWindowManager } from '../service/SessionWindowManager';
+import { SessionStage } from '../model/SessionModels';
 import { common } from '@kit.AbilityKit';
-import { router } from '@kit.ArkUI';
 
 @Entry
 @Component
 struct Index {
   @State homeViewModel: HomeViewModel = new HomeViewModel();
   @State pageWidth: number = 1280;
+  @State activeSessions: SessionRecord[] = [];
+  @State isConnecting: boolean = false;
+  private unsubSessionChanged: (() => void) | null = null;
+  private unsubWindowClosed: (() => void) | null = null;
+  private refreshTimer: number = -1;
 
   private isPhoneLayout(): boolean {
     return this.pageWidth < 840;
@@ -42,6 +50,111 @@ struct Index {
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void this.homeViewModel.initialize(context);
+
+    this.activeSessions = sessionManager.getActiveSessions();
+
+    this.unsubSessionChanged = sessionManager.onChanged(() => {
+      this.activeSessions = sessionManager.getActiveSessions();
+    });
+
+    this.unsubWindowClosed = sessionWindowManager.onWindowClosed((_sessionId: number) => {
+      this.activeSessions = sessionManager.getActiveSessions();
+    });
+
+    this.refreshTimer = setInterval(() => {
+      this.activeSessions = sessionManager.getActiveSessions();
+    }, 2000);
+  }
+
+  aboutToDisappear(): void {
+    if (this.unsubSessionChanged !== null) {
+      this.unsubSessionChanged();
+      this.unsubSessionChanged = null;
+    }
+    if (this.unsubWindowClosed !== null) {
+      this.unsubWindowClosed();
+      this.unsubWindowClosed = null;
+    }
+    if (this.refreshTimer >= 0) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = -1;
+    }
+  }
+
+  private async connectAndOpenWindow(): Promise<void> {
+    if (this.isConnecting) {
+      return;
+    }
+
+    const profile = this.homeViewModel.profile;
+    if (!this.homeViewModel.canConnect) {
+      this.homeViewModel.lastMessage = '请填写服务器地址和用户名';
+      return;
+    }
+
+    this.isConnecting = true;
+    this.homeViewModel.lastMessage = '正在连接远程桌面...';
+
+    try {
+      const sessionId: number = await sessionManager.createAndConnect(profile);
+      if (sessionId <= 0) {
+        this.homeViewModel.lastMessage = '创建会话失败';
+        this.isConnecting = false;
+        return;
+      }
+
+      const opened: boolean = await sessionWindowManager.openSessionWindow(sessionId, profile);
+      if (!opened) {
+        this.homeViewModel.lastMessage = '打开远程桌面窗口失败';
+        await sessionManager.disconnect(sessionId);
+        sessionManager.removeSession(sessionId);
+      } else {
+        this.homeViewModel.lastMessage = `已连接到 ${profile.host}，远程桌面窗口已打开`;
+      }
+    } catch (e) {
+      this.homeViewModel.lastMessage = '连接失败: ' + (e as Error).message;
+    }
+
+    this.isConnecting = false;
+    this.activeSessions = sessionManager.getActiveSessions();
+  }
+
+  private async focusSession(sessionId: number): Promise<void> {
+    await sessionWindowManager.openSessionWindow(sessionId);
+  }
+
+  private async disconnectSession(sessionId: number): Promise<void> {
+    await sessionWindowManager.closeSessionWindow(sessionId);
+    this.activeSessions = sessionManager.getActiveSessions();
+  }
+
+  private stageLabel(stage: SessionStage): string {
+    if (stage === SessionStage.Connected) {
+      return '已连接';
+    }
+    if (stage === SessionStage.Connecting) {
+      return '连接中';
+    }
+    if (stage === SessionStage.Disconnected) {
+      return '已断开';
+    }
+    if (stage === SessionStage.Error) {
+      return '错误';
+    }
+    return '空闲';
+  }
+
+  private stageColor(stage: SessionStage): string {
+    if (stage === SessionStage.Connected) {
+      return '#16A34A';
+    }
+    if (stage === SessionStage.Connecting) {
+      return '#F59E0B';
+    }
+    if (stage === SessionStage.Error) {
+      return '#DC2626';
+    }
+    return '#6B7280';
   }
 
   build() {
@@ -66,6 +179,80 @@ struct Index {
                 .borderRadius(999)
             }
             .alignItems(VerticalAlign.Top)
+
+            if (this.activeSessions.length > 0) {
+              Column({ space: 12 }) {
+                Row() {
+                  Text('活跃会话')
+                    .fontSize(20)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#111827')
+                    .layoutWeight(1)
+
+                  Text(`${this.activeSessions.length} 个连接`)
+                    .fontSize(13)
+                    .fontColor('#6B7280')
+                }
+                .width('100%')
+
+                ForEach(this.activeSessions, (record: SessionRecord) => {
+                  Row() {
+                    Column({ space: 4 }) {
+                      Text(record.state.title)
+                        .fontSize(15)
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor('#111827')
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                      Text(record.state.message)
+                        .fontSize(12)
+                        .fontColor('#6B7280')
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    }
+                    .layoutWeight(1)
+                    .alignItems(HorizontalAlign.Start)
+
+                    Text(this.stageLabel(record.state.stage))
+                      .fontSize(12)
+                      .fontColor(this.stageColor(record.state.stage))
+                      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                      .backgroundColor('#F3F4F6')
+                      .borderRadius(999)
+
+                    Row({ space: 8 }) {
+                      Button('切换')
+                        .type(ButtonType.Normal)
+                        .fontSize(13)
+                        .height(32)
+                        .backgroundColor('#EBF5FF')
+                        .fontColor('#2E6BE6')
+                        .borderRadius(8)
+                        .onClick(() => this.focusSession(record.sessionId))
+
+                      Button('断开')
+                        .type(ButtonType.Normal)
+                        .fontSize(13)
+                        .height(32)
+                        .backgroundColor('#FEE2E2')
+                        .fontColor('#DC2626')
+                        .borderRadius(8)
+                        .onClick(() => this.disconnectSession(record.sessionId))
+                    }
+                  }
+                  .width('100%')
+                  .padding(16)
+                  .backgroundColor('#FFFFFF')
+                  .border({ width: 1, color: '#E5E7EB' })
+                  .borderRadius(12)
+                }, (record: SessionRecord) => `${record.sessionId}`)
+              }
+              .padding(24)
+              .backgroundColor('#FFFFFF')
+              .borderRadius(24)
+              .shadow({ radius: 32, color: 'rgba(0,0,0,0.04)', offsetX: 0, offsetY: 8 })
+            }
 
             Column({ space: 16 }) {
               Column({ space: 12 }) {
@@ -99,39 +286,8 @@ struct Index {
                   onClipboardChange: (value: boolean) => this.homeViewModel.toggleClipboard(value),
                   onNew: () => { this.homeViewModel.createNewProfile(); },
                   onSave: () => { void this.homeViewModel.saveCurrentProfile(); },
-                  canConnect: this.homeViewModel.canConnect,
-                  onConnect: async () => {
-                    const profile = this.homeViewModel.profile;
-                    this.homeViewModel.lastMessage = '正在连接远程桌面...';
-                    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-                    AppStorage.setOrCreate<string>('sessionWantPayload', JSON.stringify({
-                      id: profile.id,
-                      name: profile.name,
-                      host: profile.host,
-                      port: profile.port,
-                      clientHostname: profile.clientHostname.length > 0
-                        ? profile.clientHostname
-                        : context.abilityInfo.bundleName,
-                      username: profile.username,
-                      password: profile.password,
-                      rememberPassword: profile.rememberPassword,
-                      domain: profile.domain,
-                      gateway: profile.gateway,
-                      gatewayUsername: profile.gatewayUsername,
-                      gatewayPassword: profile.gatewayPassword,
-                      gatewayDomain: profile.gatewayDomain,
-                      securityMode: profile.securityMode,
-                      appDataDir: context.filesDir,
-                      enableClipboard: profile.enableClipboard,
-                      enableAudio: profile.enableAudio,
-                      enableDrive: profile.enableDrive
-                    }));
-                    try {
-                      router.pushUrl({ url: 'pages/Session' });
-                    } catch (e) {
-                      this.homeViewModel.lastMessage = '启动连接失败: ' + (e as Error).message;
-                    }
-                  }
+                  canConnect: this.homeViewModel.canConnect && !this.isConnecting,
+                  onConnect: () => { void this.connectAndOpenWindow(); }
                 })
 
                 BookmarkList({
@@ -141,6 +297,10 @@ struct Index {
                   },
                   onDelete: (profileId) => {
                     void this.homeViewModel.deleteBookmark(profileId);
+                  },
+                  onQuickConnect: (profile) => {
+                    this.homeViewModel.applyBookmark(profile);
+                    void this.connectAndOpenWindow();
                   }
                 })
               }

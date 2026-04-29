@@ -1,5 +1,6 @@
 import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
+import { sessionWindowManager } from '../service/SessionWindowManager';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
@@ -8,8 +9,11 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('showBookmarksFirst', true);
     AppStorage.setOrCreate('bookmarkPayload', '');
     AppStorage.setOrCreate('draftProfilePayload', '');
+    AppStorage.setOrCreate<number>('activeSessionId', 0);
     PersistentStorage.persistProp('bookmarkPayload', '');
     PersistentStorage.persistProp('draftProfilePayload', '');
+
+    sessionWindowManager.initialize(this.context);
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
@@ -20,5 +24,9 @@ export default class EntryAbility extends UIAbility {
         console.error(`loadContent failed: ${serializedError}`);
       }
     });
+  }
+
+  onDestroy(): void {
+    void sessionWindowManager.closeAllWindows();
   }
 }

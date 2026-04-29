@@ -11,6 +11,14 @@
     {
       "name": "EntryAbility_desc",
       "value": "Entry ability for FreeRDP Harmony"
+    },
+    {
+      "name": "SessionAbility_desc",
+      "value": "远程桌面会话窗口"
+    },
+    {
+      "name": "session_ability_label",
+      "value": "远程桌面"
     }
   ]
 }

@@ -958,34 +958,66 @@ void FreeRDPHarmonySession::FillAuthentication(char** username, char** password,
     return;
   }
 
-  if (config_.username.empty() || config_.password.empty()) {
-    std::unique_lock<std::mutex> lock(dialogMutex_);
-    dialogAnswered_ = false;
-    dialogUsername_.clear();
-    dialogPassword_.clear();
-    dialogDomain_.clear();
+  const auto authReason = static_cast<rdp_auth_reason>(reason);
 
-    {
-      std::lock_guard<std::mutex> lockEvent(mutex_);
-      pendingSessionEvents_.push_back(HarmonySessionEvent{
-          HarmonySessionEventType::kAuthRequired, info_.stage, info_.lastError, info_.connected,
-          frameSequence_, "需要凭据", "", "", "", "", ""});
-    }
-    stateChanged_.notify_all();
-
-    dialogCV_.wait(lock, [this]() { return dialogAnswered_ || stopRequested_; });
-
-    if (dialogAnswered_) {
-      ReplaceCString(username, dialogUsername_);
-      ReplaceCString(password, dialogPassword_);
-      ReplaceCString(domain, dialogDomain_);
-      return;
-    }
+  if (!config_.username.empty() && !config_.password.empty()) {
+    HiLogInfo("FillAuthentication: using configured credentials");
+    ReplaceCString(username, config_.username);
+    ReplaceCString(password, config_.password);
+    ReplaceCString(domain, config_.domain);
+    return;
   }
 
-  ReplaceCString(username, config_.username);
-  ReplaceCString(password, config_.password);
-  ReplaceCString(domain, config_.domain);
+  switch (authReason) {
+    case AUTH_NLA:
+      HiLogInfo("FillAuthentication: NLA auth required, showing dialog");
+      break;
+
+    case AUTH_TLS:
+    case AUTH_RDP:
+      if ((*username != nullptr && **username != '\0') &&
+          (*password != nullptr && **password != '\0')) {
+        HiLogInfo("FillAuthentication: TLS/RDP with existing credentials, using them");
+        return;
+      }
+      HiLogInfo("FillAuthentication: TLS/RDP without credentials, returning empty for greeter");
+      ReplaceCString(username, "");
+      ReplaceCString(password, "");
+      ReplaceCString(domain, "");
+      return;
+
+    default:
+      HiLogInfo("FillAuthentication: unknown reason=" + std::to_string(reason) + ", showing dialog");
+      break;
+  }
+
+  std::unique_lock<std::mutex> lock(dialogMutex_);
+  dialogAnswered_ = false;
+  dialogUsername_.clear();
+  dialogPassword_.clear();
+  dialogDomain_.clear();
+
+  {
+    std::lock_guard<std::mutex> lockEvent(mutex_);
+    pendingSessionEvents_.push_back(HarmonySessionEvent{
+        HarmonySessionEventType::kAuthRequired, info_.stage, info_.lastError, info_.connected,
+        frameSequence_, "请输入登录凭据", ""});
+  }
+  stateChanged_.notify_all();
+
+  dialogCV_.wait(lock, [this]() { return dialogAnswered_ || stopRequested_; });
+
+  if (dialogAnswered_) {
+    HiLogInfo("FillAuthentication: user provided credentials, username=" + dialogUsername_);
+    ReplaceCString(username, dialogUsername_);
+    ReplaceCString(password, dialogPassword_);
+    ReplaceCString(domain, dialogDomain_);
+  } else {
+    HiLogInfo("FillAuthentication: dialog cancelled or stop requested");
+    ReplaceCString(username, "");
+    ReplaceCString(password, "");
+    ReplaceCString(domain, "");
+  }
 }
 
 bool FreeRDPHarmonySession::VerifyCertificate(const char* host, std::uint16_t port,
@@ -1478,7 +1510,9 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
 
 std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   std::vector<std::string> args;
-  const std::string securityMode = ToLower(config_.securityMode);
+  const bool hasCredentials = !config_.username.empty() && !config_.password.empty();
+  HiLogInfo("BuildCommandLineArgs: hasCredentials=" + std::string(hasCredentials ? "true" : "false") +
+            " configMode=" + config_.securityMode);
   args.emplace_back("freerdp-harmony");
   args.emplace_back("/gdi:sw");
   args.emplace_back("/v:" + config_.host);
@@ -1489,14 +1523,19 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
     args.emplace_back("/client-hostname:" + config_.clientHostname);
   }
 
-  if (!config_.username.empty()) {
+  if (hasCredentials) {
     args.emplace_back("/u:" + config_.username);
-  }
-  if (!config_.password.empty()) {
     args.emplace_back("/p:" + config_.password);
-  }
-  if (!config_.domain.empty()) {
-    args.emplace_back("/d:" + config_.domain);
+    if (!config_.domain.empty()) {
+      args.emplace_back("/d:" + config_.domain);
+    }
+    const std::string secMode = ToLower(config_.securityMode);
+    if (!secMode.empty() && secMode != "auto") {
+      args.emplace_back("/sec:" + secMode);
+    }
+  } else {
+    args.emplace_back("/p");
+    args.emplace_back("/sec:tls,rdp");
   }
   if (!config_.gateway.empty()) {
     std::string gatewayArg = "/gateway:g:" + config_.gateway;
@@ -1510,11 +1549,6 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
       gatewayArg += ",p:" + config_.gatewayPassword;
     }
     args.emplace_back(gatewayArg);
-  }
-  if (IsSecurityModeEnabled(securityMode, "nla") ||
-      IsSecurityModeEnabled(securityMode, "tls") ||
-      IsSecurityModeEnabled(securityMode, "rdp")) {
-    args.emplace_back("/sec:" + securityMode);
   }
 
   const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1280U;

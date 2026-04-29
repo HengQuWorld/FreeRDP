@@ -45,6 +45,7 @@ export struct AuthDialog {
           .backgroundColor('#F0F0F0')
           .fontColor('#333333')
           .onClick(() => {
+            this.onConfirm('', '', '');
             this.controller.close();
           })
           .margin({ right: 10 })

@@ -1,34 +1,56 @@
-import { router } from '@kit.ArkUI';
 import pasteboard from '@ohos.pasteboard';
+import window from '@ohos.window';
+import common from '@ohos.app.ability.common';
 import { SessionWindow } from '../components/SessionWindow';
-import { SessionViewModel } from '../viewmodel/SessionViewModel';
-import { ConnectionProfile } from '../model/ConnectionProfile';
-import { SessionEvent } from '../model/SessionModels';
+import { sessionManager, SessionRecord } from '../service/SessionManager';
+import { sessionWindowManager } from '../service/SessionWindowManager';
+import { SessionEvent, SessionStage, SessionSnapshot } from '../model/SessionModels';
 import { AuthDialog } from '../components/AuthDialog';
 import { CertDialog } from '../components/CertDialog';
+import { SessionLaunchParams, DEFAULT_SESSION_LAUNCH_PARAMS } from '../entryability/SessionAbility';
+
+interface WindowLike {
+  setWindowTitle?: (t: string) => void;
+  setWindowDecorVisible?: (visible: boolean) => void;
+}
 
 @Entry
 @Component
 struct Session {
-  private static readonly SESSION_WANT_PAYLOAD_KEY: string = 'sessionWantPayload';
-  @State sessionViewModel: SessionViewModel | null = null;
-  private refreshTimer: number = -1;
-  private connectTimer: number = -1;
+  @State sessionId: number = 0;
+  @State sessionTitle: string = '';
+  @State sessionHost: string = '';
+  @State sessionSubtitle: string = '';
+  @State sessionStage: SessionStage = SessionStage.Idle;
+  @State sessionSnapshot: SessionSnapshot = {
+    width: 0,
+    height: 0,
+    frameStride: 0,
+    frameSequence: 0,
+    dirtyLeft: 0,
+    dirtyTop: 0,
+    dirtyWidth: 0,
+    dirtyHeight: 0
+  };
+  @State authEvent: SessionEvent | null = null;
+  @State certEvent: SessionEvent | null = null;
+
   private systemPasteboard: pasteboard.SystemPasteboard = pasteboard.getSystemPasteboard();
   private applyingRemoteClipboard: boolean = false;
   private lastClipboardText: string = '';
-  
-  @State authEvent: SessionEvent | null = null;
-  @State certEvent: SessionEvent | null = null;
+  private refreshTimer: number = -1;
+  private unsubSessionChanged: (() => void) | null = null;
 
   authDialogController: CustomDialogController = new CustomDialogController({
     builder: AuthDialog({
       event: this.authEvent,
-      username: this.sessionViewModel?.state.profile.username || '',
-      password: this.sessionViewModel?.state.profile.password || '',
-      domain: this.sessionViewModel?.state.profile.domain || '',
+      username: '',
+      password: '',
+      domain: '',
       onConfirm: (username: string, pass: string, domain: string) => {
-        this.sessionViewModel?.submitAuth(username, pass, domain);
+        if (this.sessionId > 0) {
+          void sessionManager.submitAuth(this.sessionId, username, pass, domain);
+        }
       }
     }),
     alignment: DialogAlignment.Center,
@@ -40,7 +62,9 @@ struct Session {
     builder: CertDialog({
       event: this.certEvent,
       onConfirm: (accept: boolean) => {
-        this.sessionViewModel?.submitCert(accept);
+        if (this.sessionId > 0) {
+          void sessionManager.submitCert(this.sessionId, accept);
+        }
       }
     }),
     alignment: DialogAlignment.Center,
@@ -48,112 +72,66 @@ struct Session {
     customStyle: true
   });
 
-  private readStoredSessionParams(): Record<string, Object> {
-    const payload: string = AppStorage.get<string>(Session.SESSION_WANT_PAYLOAD_KEY) ?? '';
-    if (payload.length === 0) {
-      return {};
-    }
+  private readActiveSessionId(): number {
+    const bridge: SessionLaunchParams = AppStorage.get<SessionLaunchParams>('__session_launch_bridge__')
+      ?? DEFAULT_SESSION_LAUNCH_PARAMS;
+    return bridge.sessionId > 0 ? bridge.sessionId : (AppStorage.get<number>('activeSessionId') ?? 0);
+  }
 
+  private getSessionWindowTitle(): string {
+    const bridge: SessionLaunchParams = AppStorage.get<SessionLaunchParams>('__session_launch_bridge__')
+      ?? DEFAULT_SESSION_LAUNCH_PARAMS;
+    if (bridge.title.length > 0 && bridge.title !== '远程桌面') {
+      return bridge.title;
+    }
+    if (this.sessionTitle.length > 0) {
+      return this.sessionTitle;
+    }
+    return '远程桌面';
+  }
+
+  private updateWindowTitle(): void {
     try {
-      const parsed: Object = JSON.parse(payload) as Object;
-      return parsed as Record<string, Object>;
-    } catch (error) {
-      console.error(`Session readStoredSessionParams failed: ${JSON.stringify(error)}`);
-      return {};
-    }
-  }
-
-  private buildProfile(): ConnectionProfile {
-    const params: Record<string, Object> = this.readStoredSessionParams();
-    console.info(`Session buildProfile host=${String(params['host'] || '')} id=${String(params['id'] || '')}`);
-
-    return {
-      id: (params['id'] as string) || '',
-      name: (params['name'] as string) || '',
-      host: (params['host'] as string) || '',
-      port: (typeof params['port'] === 'number') ? params['port'] : Number(params['port'] || 3389),
-      clientHostname: (params['clientHostname'] as string) || '',
-      username: (params['username'] as string) || '',
-      password: (params['password'] as string) || '',
-      rememberPassword: (params['rememberPassword'] as boolean) || false,
-      domain: (params['domain'] as string) || '',
-      gateway: (params['gateway'] as string) || '',
-      gatewayUsername: (params['gatewayUsername'] as string) || '',
-      gatewayPassword: (params['gatewayPassword'] as string) || '',
-      gatewayDomain: (params['gatewayDomain'] as string) || '',
-      securityMode: (params['securityMode'] as string) || 'auto',
-      appDataDir: (params['appDataDir'] as string) || '',
-      enableClipboard: (params['enableClipboard'] as boolean) || false,
-      enableAudio: (params['enableAudio'] as boolean) || false,
-      enableDrive: (params['enableDrive'] as boolean) || false
-    };
-  }
-
-  private clearTimers(): void {
-    if (this.connectTimer >= 0) {
-      clearTimeout(this.connectTimer);
-      this.connectTimer = -1;
-    }
-    if (this.refreshTimer >= 0) {
-      clearInterval(this.refreshTimer);
-      this.refreshTimer = -1;
-    }
-  }
-
-  private closeSessionPage(): void {
-    router.back();
-  }
-
-  private beginSession(profile: ConnectionProfile): void {
-    this.clearTimers();
-    if (this.sessionViewModel !== null) {
-      this.sessionViewModel.disconnect();
-    }
-    this.sessionViewModel = new SessionViewModel(profile);
-    this.sessionViewModel.onAuthRequired = (event: SessionEvent) => {
-      this.authEvent = event;
-      this.authDialogController.open();
-    };
-    this.sessionViewModel.onCertRequired = (event: SessionEvent) => {
-      this.certEvent = event;
-      this.certDialogController.open();
-    };
-
-    this.connectTimer = setTimeout(() => {
-      this.connectTimer = -1;
-      this.startConnection();
-    }, 0);
-
-    this.refreshTimer = setInterval(() => {
-      if (this.sessionViewModel) {
-        this.sessionViewModel.drainNativeEvents();
-        const remoteClipboardText: string = this.sessionViewModel.consumeRemoteClipboardText();
-        if (remoteClipboardText.length > 0) {
-          this.applyRemoteClipboard(remoteClipboardText);
-        }
+      const title: string = this.getSessionWindowTitle();
+      const ctx = this.getUIContext()?.getHostContext?.() as common.UIAbilityContext | undefined;
+      if (!ctx) {
+        setTimeout(() => this.updateWindowTitle(), 300);
+        return;
       }
-    }, 120);
+      window.getLastWindow(ctx)
+        .then((win: Object) => {
+          try {
+            (win as WindowLike)?.setWindowTitle?.(title);
+            (win as WindowLike)?.setWindowDecorVisible?.(true);
+          } catch (e) {}
+        })
+        .catch(() => {
+          setTimeout(() => this.updateWindowTitle(), 500);
+        });
+    } catch (e) {}
   }
 
-  private startConnection(): void {
-    if (this.sessionViewModel === null) {
+  private syncFromManager(): void {
+    if (this.sessionId <= 0) {
       return;
     }
-
-    this.sessionViewModel.connect().then(() => {
-      this.sessionViewModel?.refreshSnapshot();
-    }).catch((e: Error) => {
-      if (this.sessionViewModel) {
-        this.sessionViewModel.setFailure('连接失败: ' + e.message);
-      }
-    });
+    const record: SessionRecord | undefined = sessionManager.getSession(this.sessionId);
+    if (record === undefined) {
+      return;
+    }
+    this.sessionTitle = record.state.title;
+    this.sessionHost = record.profile.username.length > 0
+      ? `${record.profile.username}@${record.profile.host}:${record.profile.port}`
+      : `${record.profile.host}:${record.profile.port}`;
+    this.sessionSubtitle = record.state.message;
+    this.sessionStage = record.state.stage;
+    this.sessionSnapshot = record.snapshot;
   }
 
   private applyRemoteClipboard(text: string): void {
     if (text.length === 0 || text === this.lastClipboardText) {
       return;
     }
-
     this.applyingRemoteClipboard = true;
     this.lastClipboardText = text;
     this.systemPasteboard.setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text)).then(() => {
@@ -164,62 +142,93 @@ struct Session {
   }
 
   aboutToAppear(): void {
-    this.beginSession(this.buildProfile());
+    this.sessionId = this.readActiveSessionId();
+    if (this.sessionId <= 0) {
+      this.sessionStage = SessionStage.Error;
+      this.sessionSubtitle = '未找到会话标识';
+      return;
+    }
+
+    this.syncFromManager();
+    this.updateWindowTitle();
+
+    this.unsubSessionChanged = sessionManager.onChanged(() => {
+      this.syncFromManager();
+    });
+
+    this.refreshTimer = setInterval(() => {
+      if (this.sessionId > 0) {
+        const remoteClipboardText: string = sessionManager.consumeRemoteClipboardText(this.sessionId);
+        if (remoteClipboardText.length > 0) {
+          this.applyRemoteClipboard(remoteClipboardText);
+        }
+      }
+    }, 120);
+  }
+
+  onPageShow(): void {
+    this.updateWindowTitle();
   }
 
   aboutToDisappear(): void {
-    this.clearTimers();
-    if (this.sessionViewModel) {
-      this.sessionViewModel.disconnect();
+    if (this.unsubSessionChanged !== null) {
+      this.unsubSessionChanged();
+      this.unsubSessionChanged = null;
+    }
+    if (this.refreshTimer >= 0) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = -1;
     }
   }
 
   build() {
     Column() {
-      if (this.sessionViewModel !== null) {
-        SessionWindow({
-          sessionId: this.sessionViewModel.state.sessionId,
-          title: this.sessionViewModel.state.title,
-          subtitle: this.sessionViewModel.state.message,
-          stage: this.sessionViewModel.state.stage,
-          snapshot: this.sessionViewModel.snapshot,
-          getFrameBuffer: () => this.sessionViewModel!.getFrameBuffer(),
-          setSurfaceId: async (surfaceId: string) => {
-            await this.sessionViewModel!.setSurfaceId(surfaceId);
-          },
-          onMouseMove: async (x: number, y: number) => {
-            await this.sessionViewModel!.sendMouseMove(x, y);
-          },
-          onMouseButton: async (x: number, y: number, buttonFlags: number, down: boolean) => {
-            await this.sessionViewModel!.sendMouseButton(x, y, buttonFlags, down);
-          },
-          onMouseWheel: async (x: number, y: number, delta: number) => {
-            await this.sessionViewModel!.sendMouseWheel(x, y, delta);
-          },
-          onKeyScancode: async (scancode: number, down: boolean) => {
-            await this.sessionViewModel!.sendKeyScancode(scancode, down);
-          },
-          onUnicodeKey: async (codepoint: number, down: boolean) => {
-            await this.sessionViewModel!.sendUnicodeKey(codepoint, down);
-          },
-          onSendCtrlAltDel: async () => {
-            await this.sessionViewModel!.sendCtrlAltDel();
-          },
-          onSendWindowsKey: async () => {
-            await this.sessionViewModel!.sendWindowsKey();
-          },
-          onSendEscape: async () => {
-            await this.sessionViewModel!.sendEscape();
-          },
-          onDisconnect: async () => {
-            await this.sessionViewModel!.disconnect();
-            this.closeSessionPage();
+      SessionWindow({
+        sessionId: this.sessionId,
+        title: this.sessionTitle,
+        subtitle: this.sessionHost,
+        stage: this.sessionStage,
+        snapshot: this.sessionSnapshot,
+        getFrameBuffer: (): ArrayBuffer => {
+          if (this.sessionId <= 0) {
+            return new ArrayBuffer(0);
           }
-        })
-      }
+          return sessionManager.getFrameBuffer(this.sessionId);
+        },
+        setSurfaceId: async (surfaceId: string) => {
+          await sessionManager.setSurfaceId(this.sessionId, surfaceId);
+        },
+        onMouseMove: async (x: number, y: number) => {
+          await sessionManager.sendMouseMove(this.sessionId, x, y);
+        },
+        onMouseButton: async (x: number, y: number, buttonFlags: number, down: boolean) => {
+          await sessionManager.sendMouseButton(this.sessionId, x, y, buttonFlags, down);
+        },
+        onMouseWheel: async (x: number, y: number, delta: number) => {
+          await sessionManager.sendMouseWheel(this.sessionId, x, y, delta);
+        },
+        onKeyScancode: async (scancode: number, down: boolean) => {
+          await sessionManager.sendKeyScancode(this.sessionId, scancode, down);
+        },
+        onUnicodeKey: async (codepoint: number, down: boolean) => {
+          await sessionManager.sendUnicodeKey(this.sessionId, codepoint, down);
+        },
+        onSendCtrlAltDel: async () => {
+          await sessionManager.sendCtrlAltDel(this.sessionId);
+        },
+        onSendWindowsKey: async () => {
+          await sessionManager.sendWindowsKey(this.sessionId);
+        },
+        onSendEscape: async () => {
+          await sessionManager.sendEscape(this.sessionId);
+        },
+        onDisconnect: async () => {
+          await sessionWindowManager.closeSessionWindow(this.sessionId);
+        }
+      })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#F3F5F9')
+    .backgroundColor('#0C1416')
   }
 }

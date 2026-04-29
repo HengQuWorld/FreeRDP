@@ -5,6 +5,7 @@ export struct BookmarkList {
   @Prop items: ConnectionProfile[];
   onSelect: (profile: ConnectionProfile) => void = (_profile: ConnectionProfile): void => {};
   onDelete: (profileId: string) => void = (_profileId: string): void => {};
+  onQuickConnect: (profile: ConnectionProfile) => void = (_profile: ConnectionProfile): void => {};
 
   build() {
     Column({ space: 12 }) {
@@ -40,6 +41,15 @@ export struct BookmarkList {
             .alignItems(HorizontalAlign.Start)
 
             Row({ space: 8 }) {
+              Button('连接')
+                .type(ButtonType.Normal)
+                .fontSize(13)
+                .height(32)
+                .backgroundColor('#2E6BE6')
+                .fontColor('#FFFFFF')
+                .borderRadius(8)
+                .onClick(() => this.onQuickConnect(item))
+
               Button('载入')
                 .type(ButtonType.Normal)
                 .fontSize(13)

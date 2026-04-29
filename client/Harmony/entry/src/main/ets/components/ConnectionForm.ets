@@ -63,6 +63,17 @@ export struct ConnectionForm {
         .type(InputType.Password)
         .onChange((value: string) => this.onPasswordChange(value))
 
+      if (this.profile.username.length === 0 || this.profile.password.length === 0) {
+        Text('提示：不填写用户名或密码时，连接后将显示远端登录页面（Windows/Linux），可直接在远端界面输入。')
+          .fontSize(12)
+          .fontColor('#FF8C00')
+          .backgroundColor('#FFF8E6')
+          .padding(10)
+          .borderRadius(8)
+          .width('100%')
+          .margin({ bottom: 4 })
+      }
+
       Row() {
         Text('记住密码')
           .layoutWeight(1)

@@ -435,8 +435,18 @@ export struct RemoteDesktopSurface {
           .position({ x: -100, y: -100 })
           .focusable(true)
           .focusOnTouch(true)
+          .type(InputType.Normal)
           .onChange((value: string) => {
             this.handleSoftInputChange(value);
+          })
+          .onSubmit((_: EnterKeyType) => {
+            const enter: number = KeyboardMapper.mapKeyScancode('Enter', 0);
+            if (enter > 0) {
+              this.onKeyScancode(enter, true);
+              setTimeout(() => {
+                this.onKeyScancode(enter, false);
+              }, 10);
+            }
           })
       }
     }
