@@ -2,6 +2,7 @@ import { image } from '@kit.ImageKit';
 import { inputMethod } from '@kit.IMEKit';
 import { SessionSnapshot, SessionStage } from '../model/SessionModels';
 import { KeyboardMapper } from '../utils/KeyboardMapper';
+import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 
 const PTR_FLAGS_BUTTON1: number = 0x1000;
 const PTR_FLAGS_BUTTON2: number = 0x2000;
@@ -31,6 +32,8 @@ export struct RemoteDesktopSurface {
   @Prop snapshot: SessionSnapshot;
   @Prop keyboardRequestToken: number = 0;
   @Prop isFullscreen: boolean = false;
+  @Prop @Watch('onThemeChanged') isDark: boolean = false;
+  @State colors: ThemeColors = LightColors;
   getFrameBuffer: () => ArrayBuffer = (): ArrayBuffer => new ArrayBuffer(0);
   setSurfaceId: (surfaceId: string) => Promise<void> = async (_surfaceId: string): Promise<void> => {};
   onMouseMove: (x: number, y: number) => void = (_x: number, _y: number): void => {};
@@ -50,6 +53,12 @@ export struct RemoteDesktopSurface {
   private refreshTimer: number = -1;
   private renderedFrameSequence: number = 0;
   private handledKeyboardRequestToken: number = 0;
+
+  private surfaceController: XComponentController = new XComponentController();
+
+  onThemeChanged(): void {
+    this.colors = this.isDark ? DarkColors : LightColors;
+  }
 
   private getInputLayerId(): string {
     return 'rdp_input_layer_' + this.sessionId;
@@ -96,8 +105,6 @@ export struct RemoteDesktopSurface {
   }
 
   private toRemotePoint(localX: number, localY: number): RemotePoint {
-    // The desktop image uses ImageFit.Contain, so pointer mapping must exclude
-    // the letterbox area and only map within the actually rendered frame.
     const metrics: RenderMetrics = this.getRenderMetrics();
     const localFrameX: number = localX - metrics.offsetX;
     const localFrameY: number = localY - metrics.offsetY;
@@ -384,17 +391,18 @@ export struct RemoteDesktopSurface {
       } else if (this.stage === SessionStage.Connecting) {
         Column({ space: 12 }) {
           LoadingProgress()
+            .color(this.colors.primary)
           Text('正在建立会话并等待首帧...')
-            .fontColor('#FFFFFF')
+            .fontColor(this.colors.mutedForeground)
             .fontSize(14)
         }
       } else if (this.stage === SessionStage.Connected) {
         Text('已连接，正在等待首帧...')
-          .fontColor('#FFFFFF')
+          .fontColor(this.colors.mutedForeground)
           .fontSize(14)
       } else {
         Text('连接后将在这里展示远程桌面画面')
-          .fontColor('#D1D5DB')
+          .fontColor(this.colors.mutedForeground)
           .fontSize(14)
       }
 
@@ -452,7 +460,7 @@ export struct RemoteDesktopSurface {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#0C1416')
+    .backgroundColor(this.colors.background)
     .borderRadius(this.isFullscreen ? 0 : 18)
     .clip(true)
     .onAreaChange((_, newValue) => {

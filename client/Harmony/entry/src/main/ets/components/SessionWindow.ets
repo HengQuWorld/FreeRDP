@@ -1,6 +1,7 @@
 import { SessionSnapshot, SessionStage } from '../model/SessionModels';
 import { RemoteDesktopSurface } from './RemoteDesktopSurface';
 import { SessionToolbar } from './SessionToolbar';
+import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 
 @Component
 export struct SessionWindow {
@@ -9,6 +10,8 @@ export struct SessionWindow {
   @Prop subtitle: string;
   @Prop stage: SessionStage;
   @Prop snapshot: SessionSnapshot;
+  @Prop @Watch('onThemeChanged') isDark: boolean = false;
+  @State colors: ThemeColors = LightColors;
   getFrameBuffer: () => ArrayBuffer = (): ArrayBuffer => new ArrayBuffer(0);
   setSurfaceId: (surfaceId: string) => Promise<void> = async (_surfaceId: string): Promise<void> => {};
   onMouseMove: (x: number, y: number) => void = (_x: number, _y: number): void => {};
@@ -28,6 +31,10 @@ export struct SessionWindow {
   @State private keyboardRequestToken: number = 0;
   @State private chromeVisible: boolean = true;
   private chromeHideTimer: number = -1;
+
+  onThemeChanged(): void {
+    this.colors = this.isDark ? DarkColors : LightColors;
+  }
 
   private scheduleChromeAutoHide(): void {
     if (this.chromeHideTimer !== -1) {
@@ -69,6 +76,7 @@ export struct SessionWindow {
         snapshot: this.snapshot,
         keyboardRequestToken: this.keyboardRequestToken,
         isFullscreen: this.isFullscreen,
+        isDark: this.isDark,
         getFrameBuffer: this.getFrameBuffer,
         setSurfaceId: this.setSurfaceId,
         onMouseMove: this.onMouseMove,
@@ -94,13 +102,13 @@ export struct SessionWindow {
               Text(this.title)
                 .fontSize(this.isFullscreen ? 18 : 20)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#FFFFFF')
+                .fontColor(this.colors.chromeOverlayText)
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
 
               Text(this.subtitle)
                 .fontSize(12)
-                .fontColor('rgba(255,255,255,0.72)')
+                .fontColor(this.colors.mutedForeground)
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
             }
@@ -109,18 +117,18 @@ export struct SessionWindow {
 
             Text(this.stage)
               .fontSize(12)
-              .fontColor('#CFE0FF')
+              .fontColor(this.colors.tagText)
               .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-              .backgroundColor('rgba(46,107,230,0.28)')
+              .backgroundColor(this.colors.tagBackground)
               .borderRadius(999)
           }
           .width('100%')
           .alignItems(VerticalAlign.Center)
           .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-          .backgroundColor('rgba(12,20,22,0.76)')
-          .border({ width: 1, color: 'rgba(255,255,255,0.08)' })
+          .backgroundColor(this.colors.chromeOverlay)
+          .border({ width: 1, color: this.colors.chromeOverlayBorder })
           .borderRadius(22)
-          .shadow({ radius: 20, color: 'rgba(0,0,0,0.18)', offsetX: 0, offsetY: 6 })
+          .shadow({ radius: 20, color: this.colors.chromeOverlayShadow, offsetX: 0, offsetY: 6 })
           .onTouch((ev: TouchEvent) => {
             if (ev.type === TouchType.Down) this.extendChromeInteractionIfVisible();
           })
@@ -132,6 +140,7 @@ export struct SessionWindow {
           SessionToolbar({
             stage: this.stage,
             isFullscreen: this.isFullscreen,
+            isDark: this.isDark,
             onSendCtrlAltDel: this.onSendCtrlAltDel,
             onSendWindowsKey: this.onSendWindowsKey,
             onSendEscape: this.onSendEscape,
@@ -154,16 +163,16 @@ export struct SessionWindow {
       } else {
         Row() {
           Column({ space: 5 }) {
-            Blank().width(4).height(4).borderRadius(2).backgroundColor('rgba(255,255,255,0.9)')
-            Blank().width(4).height(4).borderRadius(2).backgroundColor('rgba(255,255,255,0.72)')
-            Blank().width(4).height(4).borderRadius(2).backgroundColor('rgba(255,255,255,0.56)')
+            Blank().width(4).height(4).borderRadius(2).backgroundColor(this.colors.dotActive)
+            Blank().width(4).height(4).borderRadius(2).backgroundColor(this.colors.dotInactive)
+            Blank().width(4).height(4).borderRadius(2).backgroundColor(this.colors.dotInactive)
           }
         }
         .width(18)
         .height(72)
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('rgba(12,20,22,0.38)')
-        .border({ width: 1, color: 'rgba(255,255,255,0.12)' })
+        .backgroundColor(this.colors.chromeOverlay)
+        .border({ width: 1, color: this.colors.chromeOverlayBorder })
         .borderRadius({ topLeft: 12, bottomLeft: 12, topRight: 0, bottomRight: 0 })
         .position({ x: '100%', y: '50%' })
         .translate({ x: '-100%', y: '-50%' })
@@ -175,7 +184,8 @@ export struct SessionWindow {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#0C1416')
+    .backgroundColor(this.colors.background)
     .padding(this.isFullscreen ? 0 : 12)
+    .animation({ duration: 300, curve: Curve.EaseIn })
   }
 }

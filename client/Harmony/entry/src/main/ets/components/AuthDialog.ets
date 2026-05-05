@@ -1,4 +1,5 @@
 import { SessionEvent } from '../model/SessionModels';
+import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 
 @CustomDialog
 export struct AuthDialog {
@@ -7,21 +8,32 @@ export struct AuthDialog {
   username: string = '';
   password: string = '';
   domain: string = '';
+  @StorageLink('__app_is_dark_mode__') @Watch('onThemeChanged') isDark: boolean = false;
+  @State colors: ThemeColors = LightColors;
   onConfirm: (username: string, password: string, domain: string) => void = () => {};
+
+  onThemeChanged(): void {
+    this.colors = this.isDark ? DarkColors : LightColors;
+  }
 
   build() {
     Column() {
       Text('需要身份验证')
         .fontSize(20)
         .fontWeight(FontWeight.Bold)
-        .margin({ bottom: 10 })
+        .fontColor(this.colors.foreground)
+        .margin({ bottom: 6 })
 
       Text('远程桌面服务器需要您的凭据。')
         .fontSize(14)
-        .fontColor('#666666')
+        .fontColor(this.colors.mutedForeground)
         .margin({ bottom: 20 })
 
       TextInput({ placeholder: '用户名', text: this.username })
+        .backgroundColor(this.colors.inputBackground)
+        .border({ width: 1, color: this.colors.inputBorder })
+        .borderRadius(10)
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
         .onChange((value: string) => {
           this.username = value;
         })
@@ -29,12 +41,20 @@ export struct AuthDialog {
 
       TextInput({ placeholder: '密码', text: this.password })
         .type(InputType.Password)
+        .backgroundColor(this.colors.inputBackground)
+        .border({ width: 1, color: this.colors.inputBorder })
+        .borderRadius(10)
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
         .onChange((value: string) => {
           this.password = value;
         })
         .margin({ bottom: 10 })
 
       TextInput({ placeholder: '域 (可选)', text: this.domain })
+        .backgroundColor(this.colors.inputBackground)
+        .border({ width: 1, color: this.colors.inputBorder })
+        .borderRadius(10)
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
         .onChange((value: string) => {
           this.domain = value;
         })
@@ -42,8 +62,9 @@ export struct AuthDialog {
 
       Row() {
         Button('取消')
-          .backgroundColor('#F0F0F0')
-          .fontColor('#333333')
+          .backgroundColor(this.colors.muted)
+          .fontColor(this.colors.mutedForeground)
+          .borderRadius(10)
           .onClick(() => {
             this.onConfirm('', '', '');
             this.controller.close();
@@ -52,8 +73,9 @@ export struct AuthDialog {
           .layoutWeight(1)
 
         Button('确定')
-          .backgroundColor('#007DFF')
-          .fontColor(Color.White)
+          .backgroundColor(this.colors.primary)
+          .fontColor(this.colors.primaryForeground)
+          .borderRadius(10)
           .onClick(() => {
             this.onConfirm(this.username, this.password, this.domain);
             this.controller.close();
@@ -64,7 +86,8 @@ export struct AuthDialog {
     }
     .padding(20)
     .width('90%')
-    .backgroundColor(Color.White)
-    .borderRadius(16)
+    .backgroundColor(this.colors.card)
+    .border({ width: 1, color: this.colors.cardBorder })
+    .borderRadius(18)
   }
 }

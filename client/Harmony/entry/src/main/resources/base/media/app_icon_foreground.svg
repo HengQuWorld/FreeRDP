@@ -4,30 +4,35 @@
       <stop offset="0%" stop-color="#FCD34D" />
       <stop offset="100%" stop-color="#F59E0B" />
     </linearGradient>
+    <linearGradient id="screen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.04" />
+    </linearGradient>
   </defs>
 
-  <g transform="translate(20, 24)">
-    <!-- Monitor frame - pure white, bold stroke -->
-    <rect x="0" y="0" width="104" height="68" rx="8" ry="8" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-width="4.5" />
+  <g transform="translate(20, 22)">
+    <!-- Monitor frame -->
+    <rect x="0" y="0" width="104" height="70" rx="8" ry="8" fill="url(#screen)" stroke="#ffffff" stroke-opacity="0.85" stroke-width="3.5" />
 
-    <!-- Screen area -->
-    <rect x="5" y="5" width="94" height="58" rx="5" ry="5" fill="#ffffff" fill-opacity="0.06" />
+    <!-- Screen inner border -->
+    <rect x="5" y="5" width="94" height="60" rx="4" ry="4" fill="#ffffff" fill-opacity="0.04" stroke="#ffffff" stroke-opacity="0.15" stroke-width="1" />
 
-    <!-- Remote connection: clean X pattern from center -->
-    <line x1="28" y1="19" x2="76" y2="49" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" />
-    <line x1="76" y1="19" x2="28" y2="49" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" />
+    <!-- Connection lines: diagonal cross representing remote link -->
+    <line x1="28" y1="19" x2="76" y2="51" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round" />
+    <line x1="76" y1="19" x2="28" y2="51" stroke="#ffffff" stroke-opacity="0.7" stroke-width="2" stroke-linecap="round" />
 
-    <!-- Center hub - gold (tiger eye) -->
-    <circle cx="52" cy="34" r="6" fill="url(#gold)" />
+    <!-- Center hub: amber gold accent -->
+    <circle cx="52" cy="35" r="7" fill="url(#gold)" />
+    <circle cx="52" cy="35" r="4" fill="#ffffff" fill-opacity="0.5" />
 
-    <!-- Four corner nodes - white dots, well spaced -->
-    <circle cx="28" cy="19" r="4" fill="#ffffff" />
-    <circle cx="76" cy="19" r="4" fill="#ffffff" />
-    <circle cx="28" cy="49" r="4" fill="#ffffff" />
-    <circle cx="76" cy="49" r="4" fill="#ffffff" />
+    <!-- Four corner nodes -->
+    <circle cx="28" cy="19" r="3.5" fill="#ffffff" fill-opacity="0.9" />
+    <circle cx="76" cy="19" r="3.5" fill="#ffffff" fill-opacity="0.9" />
+    <circle cx="28" cy="51" r="3.5" fill="#ffffff" fill-opacity="0.9" />
+    <circle cx="76" cy="51" r="3.5" fill="#ffffff" fill-opacity="0.9" />
 
     <!-- Monitor stand -->
-    <line x1="52" y1="68" x2="52" y2="80" stroke="#ffffff" stroke-opacity="0.35" stroke-width="4.5" stroke-linecap="round" />
-    <line x1="38" y1="80" x2="66" y2="80" stroke="#ffffff" stroke-opacity="0.35" stroke-width="4.5" stroke-linecap="round" />
+    <line x1="52" y1="70" x2="52" y2="82" stroke="#ffffff" stroke-opacity="0.4" stroke-width="4" stroke-linecap="round" />
+    <line x1="36" y1="82" x2="68" y2="82" stroke="#ffffff" stroke-opacity="0.4" stroke-width="4" stroke-linecap="round" />
   </g>
 </svg>
