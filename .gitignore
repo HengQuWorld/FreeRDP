@@ -3,3 +3,7 @@
 build
 checker
 abi-checker
+.hvigor/outputs/build-logs/
+client/Android/Studio/freeRDPCore/.cxx/
+client/Harmony/entry/src/main/resources/rawfile/bihu-privacy-policy.md
+.gitignore
