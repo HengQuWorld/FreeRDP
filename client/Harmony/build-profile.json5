@@ -1,20 +1,6 @@
 {
   "app": {
-    "signingConfigs": [
-      {
-        "name": "default",
-        "type": "HarmonyOS",
-        "material": {
-          "certpath": "/Users/gaord/.ohos/config/default_Harmony_BzIOx8T4_IdEuQ62nT-pwe8sfb35LKbN9RwTjI2VC28=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001B5BD4366479925C256B493196F018D70755FA39A7EF623D56BE31EC72DF798FD12D6C41700410D1",
-          "profile": "/Users/gaord/.ohos/config/default_Harmony_BzIOx8T4_IdEuQ62nT-pwe8sfb35LKbN9RwTjI2VC28=.p7b",
-          "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/gaord/.ohos/config/default_Harmony_BzIOx8T4_IdEuQ62nT-pwe8sfb35LKbN9RwTjI2VC28=.p12",
-          "storePassword": "0000001BDBEEED938AE41B96DB4C686E00F76B49776DC94FCA9BD52FE87FDAA874E1F49E0DFBA278F5F9BC"
-        }
-      }
-    ],
+    "signingConfigs": [],
     "products": [
       {
         "name": "default",
@@ -26,10 +12,16 @@
     ],
     "buildModeSet": [
       {
-        "name": "debug"
+        "name": "debug",
+        "buildOption": {
+          "debuggable": true
+        }
       },
       {
-        "name": "release"
+        "name": "release",
+        "buildOption": {
+          "debuggable": false
+        }
       }
     ]
   },
