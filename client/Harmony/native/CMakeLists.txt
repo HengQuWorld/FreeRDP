@@ -9,13 +9,20 @@ set(FREERDP_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 set(FREERDP_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/freerdp-root-build)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "OHOS")
-  set(OPENSSL_ROOT_PATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ohos-openssl CACHE PATH "" FORCE)
-  set(OPENSSL_SEARCH_PATH ${OPENSSL_ROOT_PATH}/prelude/${OHOS_ARCH})
-  list(PREPEND CMAKE_MODULE_PATH ${OPENSSL_ROOT_PATH}/package)
-  set(OPENSSL_ROOT_DIR ${OPENSSL_SEARCH_PATH} CACHE PATH "" FORCE)
-  set(OPENSSL_INCLUDE_DIR ${OPENSSL_SEARCH_PATH}/include CACHE PATH "" FORCE)
-  set(OPENSSL_SSL_LIBRARY ${OPENSSL_SEARCH_PATH}/lib/libssl.a CACHE FILEPATH "" FORCE)
-  set(OPENSSL_CRYPTO_LIBRARY ${OPENSSL_SEARCH_PATH}/lib/libcrypto.a CACHE FILEPATH "" FORCE)
+  #
+  # OpenSSL for HarmonyOS is cross-compiled from source by:
+  #   scripts/harmony-build-openssl.sh --ndk <OHOS_NDK_HOME>
+  #
+  # Run it once before the first build.  It produces:
+  #   third_party/openssl-prebuilt/<arch>/include/openssl/*.h
+  #   third_party/openssl-prebuilt/<arch>/libssl.a
+  #   third_party/openssl-prebuilt/<arch>/libcrypto.a
+  #
+  set(OPENSSL_PREBUILT_PATH ${CMAKE_CURRENT_SOURCE_DIR}/third_party/openssl-prebuilt/${OHOS_ARCH})
+  set(OPENSSL_ROOT_DIR ${OPENSSL_PREBUILT_PATH} CACHE PATH "" FORCE)
+  set(OPENSSL_INCLUDE_DIR ${OPENSSL_PREBUILT_PATH}/include CACHE PATH "" FORCE)
+  set(OPENSSL_SSL_LIBRARY ${OPENSSL_PREBUILT_PATH}/libssl.a CACHE FILEPATH "" FORCE)
+  set(OPENSSL_CRYPTO_LIBRARY ${OPENSSL_PREBUILT_PATH}/libcrypto.a CACHE FILEPATH "" FORCE)
 endif()
 
 set(WITH_CLIENT_HARMONY OFF CACHE BOOL "" FORCE)
@@ -72,5 +79,3 @@ if(CMAKE_SYSTEM_NAME STREQUAL "OHOS")
     libnative_buffer.so
   )
 endif()
-
-# TODO: add Harmony N-API and surface targets when the OpenHarmony toolchain is available.
