@@ -30,14 +30,34 @@ A HarmonyOS 6 client shell for FreeRDP.
 - The workspace shell supports host bookmarks, multiple session tabs, active session polling and a
   professional split-pane layout.
 
-## Desktop Preview
+OpenSSL is downloaded and cross-compiled automatically by CMake (via `ExternalProject`)
+during the native build step — no manual steps are required.
 
-- For immediate one-host-per-window desktop access, use the existing SDL3 client:
+### Build the App
 
 ```bash
-./client/Harmony/tools/open-sdl-window.sh 192.168.3.154 gaord 'Passw0rd~!@'
+# Debug build
+client/Harmony/scripts/build.sh debug
+
+# Release build
+client/Harmony/scripts/build.sh release
 ```
 
-- This launches a dedicated remote desktop window with clipboard and dynamic resolution enabled.
-- The same FreeRDP core is reused by the Harmony native bridge, so this is the fastest way to
-  verify connectivity, rendering and keyboard/mouse behavior before wiring ArkTS to N-API.
+Or open `client/Harmony` in DevEco Studio and build from the IDE.
+
+### Desktop Preview
+
+For quick connectivity testing, use the existing SDL3 client:
+
+```bash
+tools/open-sdl-window.sh <host> <username> <password>
+```
+
+## License
+
+This client is part of FreeRDP and licensed under the Apache License 2.0.
+See the root `LICENSE` file for details.
+
+This product includes software developed by the OpenSSL Project for use
+in the OpenSSL Toolkit (https://www.openssl.org/). See
+`native/third_party/NOTICE` for the full OpenSSL and SSLeay license texts.
