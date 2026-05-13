@@ -9,6 +9,7 @@ export class HomeViewModel {
   profile: ConnectionProfile;
   bookmarks: ConnectionProfile[] = [];
   lastMessage: string = i18n.get(i18n.currentLocale(), 'waiting_connect');
+  private isEditingBookmark: boolean = false;
 
   private bookmarkService: BookmarkService = new BookmarkService();
   private context: common.UIAbilityContext | null = null;
@@ -134,6 +135,7 @@ export class HomeViewModel {
 
   createNewProfile(): void {
     this.profile = createEmptyProfile(IdGenerator.next('profile'));
+    this.isEditingBookmark = false;
     this.persistDraft();
   }
 
@@ -145,6 +147,7 @@ export class HomeViewModel {
 
   applyBookmark(profile: ConnectionProfile): void {
     this.profile = this.copyProfile(profile);
+    this.isEditingBookmark = true;
     this.persistDraft();
     this.lastMessage = `${i18n.get(i18n.currentLocale(), 'loaded_profile_prefix')} ${profile.name}`;
   }
@@ -160,9 +163,10 @@ export class HomeViewModel {
       return;
     }
     const saved: ConnectionProfile = this.copyProfile(this.profile);
-    saved.id = this.profile.id.length > 0 ? this.profile.id : IdGenerator.next('bookmark');
+    saved.id = this.isEditingBookmark ? this.profile.id : IdGenerator.next('bookmark');
     saved.name = this.profile.name.length > 0 ? this.profile.name : this.profile.host;
     await this.bookmarkService.save(context, saved);
+    this.isEditingBookmark = true;
     this.bookmarks = await this.bookmarkService.list(context);
     this.profile = this.copyProfile(saved);
     this.persistDraft();
