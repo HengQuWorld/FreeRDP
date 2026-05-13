@@ -83,6 +83,9 @@ export class HomeViewModel {
   toggleRememberPassword(value: boolean): void {
     const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
     nextProfile.rememberPassword = value;
+    if (!value) {
+      nextProfile.password = '';
+    }
     this.profile = nextProfile;
     this.persistDraft();
   }

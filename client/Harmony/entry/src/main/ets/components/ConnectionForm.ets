@@ -122,16 +122,28 @@ export struct ConnectionForm {
           .fontColor(this.colors.foreground)
           .onChange((v) => this.onDomainChange(v));
 
+        Row() {
+          Text(i18n.get(this.appLanguage, 'remember_password'))
+            .fontSize(16)
+            .fontColor(this.colors.foreground)
+            .layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.rememberPassword })
+            .onChange((value: boolean) => this.onRememberPasswordChange(value))
+        }
+        .width('100%')
+        .padding({ left: 4, right: 4, top: 8, bottom: 8 })
+
         TextInput({ placeholder: i18n.get(this.appLanguage, 'password_placeholder'), text: this.profile.password })
           .type(InputType.Password)
-          .backgroundColor(this.colors.inputBackground)
+          .backgroundColor(this.rememberPassword ? this.colors.inputBackground : this.colors.muted)
           .borderRadius(12)
           .border({ width: 1, color: this.colors.inputBorder })
           .fontSize(16)
           .height(50)
           .padding({ left: 16, right: 16 })
           .placeholderColor(this.colors.mutedForeground)
-          .fontColor(this.colors.foreground)
+          .fontColor(this.rememberPassword ? this.colors.foreground : this.colors.mutedForeground)
+          .enabled(this.rememberPassword)
           .onChange((v) => this.onPasswordChange(v));
 
         if (this.profile.username.length === 0 || this.profile.password.length === 0) {
@@ -156,17 +168,6 @@ export struct ConnectionForm {
           .backgroundColor(this.colors.hintOrangeBg)
           .borderRadius(12)
         }
-
-        Row() {
-          Text(i18n.get(this.appLanguage, 'remember_password'))
-            .fontSize(16)
-            .fontColor(this.colors.foreground)
-            .layoutWeight(1)
-          Toggle({ type: ToggleType.Switch, isOn: this.rememberPassword })
-            .onChange((value: boolean) => this.onRememberPasswordChange(value))
-        }
-        .width('100%')
-        .padding({ left: 4, right: 4, top: 8, bottom: 8 })
       }
 
       Column({ space: 0 }) {
