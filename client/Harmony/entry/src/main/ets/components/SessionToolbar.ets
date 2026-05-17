@@ -1,74 +1,86 @@
 import { SessionStage } from '../model/SessionModels';
-import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 
 @Component
 export struct SessionToolbar {
   @Prop stage: SessionStage;
   @Prop isFullscreen: boolean = false;
-  @StorageLink('__app_is_dark_mode__') @Watch('onThemeChanged') isDark: boolean = false;
   @StorageLink('__app_language__') appLanguage: string = 'system';
-  @State colors: ThemeColors = LightColors;
   onSendCtrlAltDel: () => void = (): void => {};
   onSendWindowsKey: () => void = (): void => {};
   onSendEscape: () => void = (): void => {};
   onShowKeyboard: () => void = (): void => {};
   onToggleFullscreen: () => void = (): void => {};
   onDisconnect: () => void = (): void => {};
-
-  onThemeChanged(): void {
-    this.colors = this.isDark ? DarkColors : LightColors;
-  }
-
-  aboutToAppear(): void {
-    this.colors = this.isDark ? DarkColors : LightColors;
-  }
+  @Prop zoomScale: number = 1.0;
+  onZoomIn: () => void = (): void => {};
+  onZoomOut: () => void = (): void => {};
+  onResetZoom: () => void = (): void => {};
+  @Prop showNavigationPad: boolean = false;
+  onToggleNavigationPad: () => void = (): void => {};
 
   build() {
-    Row({ space: 6 }) {
-      Scroll() {
-        Row({ space: 6 }) {
-          this.buildToolbarBtn(this.isFullscreen ? i18n.get(this.appLanguage, 'exit_fullscreen') : i18n.get(this.appLanguage, 'fullscreen'), () => this.onToggleFullscreen());
-          this.buildToolbarBtn(i18n.get(this.appLanguage, 'keyboard'), () => this.onShowKeyboard());
-          this.buildToolbarBtn('Ctrl+Alt+Del', () => this.onSendCtrlAltDel());
-          this.buildToolbarBtn('Win', () => this.onSendWindowsKey());
-          this.buildToolbarBtn('Esc', () => this.onSendEscape());
-
-          Blank().width(8);
-
-          Button(i18n.get(this.appLanguage, 'disconnect'))
-            .type(ButtonType.Capsule)
-            .height(32)
-            .fontSize(12)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#ef4444')
-            .backgroundColor('rgba(239,68,68,0.12)')
-            .enabled(this.stage === SessionStage.Connected || this.stage === SessionStage.Connecting)
-            .onClick(() => this.onDisconnect())
-        }
+    Column({ space: 8 }) {
+      Row({ space: 8 }) {
+        this.buildToolbarBtn(i18n.get(this.appLanguage, 'keyboard'), () => this.onShowKeyboard(), false)
+        this.buildToolbarBtn('导航', () => this.onToggleNavigationPad(), this.showNavigationPad)
+        this.buildToolbarBtn('Ctrl+Alt+Del', () => this.onSendCtrlAltDel(), false)
+        this.buildToolbarBtn('Win', () => this.onSendWindowsKey(), false)
+        this.buildToolbarBtn('Esc', () => this.onSendEscape(), false)
       }
-      .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Off)
-      .width('100%')
+      .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+      .backgroundColor('rgba(12,20,22,0.82)')
+      .border({ width: 1, color: 'rgba(255,255,255,0.08)' })
+      .borderRadius(22)
+      .shadow({ radius: 20, color: 'rgba(0,0,0,0.18)', offsetX: 0, offsetY: 6 })
+      .constraintSize({ maxWidth: '100%' })
+
+      Row({ space: 8 }) {
+        this.buildToolbarBtn('−', () => this.onZoomOut(), false)
+        this.buildToolbarBtn(`${Math.round(this.zoomScale * 100)}%`, () => this.onResetZoom(), this.zoomScale > 1.05)
+        this.buildToolbarBtn('+', () => this.onZoomIn(), false)
+        this.buildToolbarBtn(this.isFullscreen ? i18n.get(this.appLanguage, 'exit_fullscreen') : i18n.get(this.appLanguage, 'fullscreen'), () => this.onToggleFullscreen(), false)
+        Button(i18n.get(this.appLanguage, 'disconnect'))
+          .type(ButtonType.Normal)
+          .height(40)
+          .constraintSize({ minWidth: 68 })
+          .flexShrink(1)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#f87171')
+          .backgroundColor('rgba(239,68,68,0.10)')
+          .border({ width: 1, color: 'rgba(239,68,68,0.22)' })
+          .borderRadius(16)
+          .enabled(this.stage === SessionStage.Connected || this.stage === SessionStage.Connecting)
+          .onClick(() => this.onDisconnect())
+      }
+      .padding({ left: 10, right: 10, top: 10, bottom: 10 })
+      .backgroundColor('rgba(12,20,22,0.82)')
+      .border({ width: 1, color: 'rgba(255,255,255,0.08)' })
+      .borderRadius(22)
+      .shadow({ radius: 20, color: 'rgba(0,0,0,0.18)', offsetX: 0, offsetY: 6 })
+      .constraintSize({ maxWidth: '100%' })
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .backgroundColor(this.colors.chromeOverlay)
-    .border({ width: 1, color: this.colors.chromeOverlayBorder })
-    .borderRadius(22)
-    .shadow({ radius: 20, color: this.colors.chromeOverlayShadow, offsetX: 0, offsetY: 6 })
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 12, right: 12 })
+    .margin({ bottom: this.isFullscreen ? 12 : 24 })
   }
 
   @Builder
-  private buildToolbarBtn(label: string, onTap: () => void): void {
+  private buildToolbarBtn(label: string, onTap: () => void, active: boolean): void {
     Button(label)
       .type(ButtonType.Normal)
-      .height(32)
+      .height(40)
+      .constraintSize({ minWidth: 68 })
+      .flexShrink(1)
       .fontSize(12)
-      .fontColor(this.colors.chromeOverlayText)
-      .backgroundColor(Color.Transparent)
-      .borderRadius(10)
+      .fontColor(active ? '#ffffff' : '#f5f5f4')
+      .backgroundColor(active ? 'rgba(34,160,107,0.85)' : 'rgba(255,255,255,0.08)')
+      .border({ width: active ? 0 : 1, color: active ? 'rgba(34,160,107,0.85)' : 'rgba(255,255,255,0.12)' })
+      .borderRadius(16)
       .enabled(this.stage === SessionStage.Connected)
-      .onClick(onTap);
+      .opacity(this.stage === SessionStage.Connected ? 1 : 0.5)
+      .onClick(onTap)
   }
 }

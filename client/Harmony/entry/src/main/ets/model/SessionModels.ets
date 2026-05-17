@@ -16,6 +16,7 @@ export interface SessionState {
   title: string;
   message: string;
   profile: ConnectionProfile;
+  certCommonName: string;
 }
 
 export interface SessionSnapshot {

@@ -16,6 +16,7 @@ export interface NativeSessionConfig {
   enableAudio: boolean;
   enableDrive: boolean;
   ignoreCertificate: boolean;
+  enableGfx: boolean;
   desktopWidth: number;
   desktopHeight: number;
 }
@@ -25,6 +26,7 @@ export interface NativeSessionInfo {
   lastError: number;
   connected: boolean;
   message: string;
+  certCommonName: string;
 }
 
 export interface NativeSessionSnapshot {

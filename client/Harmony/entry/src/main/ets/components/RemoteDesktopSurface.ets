@@ -47,14 +47,43 @@ export struct RemoteDesktopSurface {
     (_scancode: number, _down: boolean): void => {};
   onUnicodeKey: (codepoint: number, down: boolean) => void =
     (_codepoint: number, _down: boolean): void => {};
+  onScaleChange: (scale: number) => void = (_scale: number): void => {};
+  onSurfaceSizeChange: (width: number, height: number) => void = (_width: number, _height: number): void => {};
+  @Prop @Watch('onZoomInTriggered') zoomInToken: number = 0;
+  @Prop @Watch('onZoomOutTriggered') zoomOutToken: number = 0;
+  @Prop @Watch('onZoomResetTriggered') zoomResetToken: number = 0;
+  @Prop @Watch('onPanUpTriggered') panUpToken: number = 0;
+  @Prop @Watch('onPanDownTriggered') panDownToken: number = 0;
+  @Prop @Watch('onPanLeftTriggered') panLeftToken: number = 0;
+  @Prop @Watch('onPanRightTriggered') panRightToken: number = 0;
 
   @State private surfaceWidth: number = 0;
   @State private surfaceHeight: number = 0;
   @State private framePixelMap: image.PixelMap | null = null;
   @State private softInputDraft: string = '';
+  @State zoomScale: number = 1.0;
+  @State panOffsetX: number = 0;
+  @State panOffsetY: number = 0;
   private refreshTimer: number = -1;
   private renderedFrameSequence: number = 0;
   private handledKeyboardRequestToken: number = 0;
+  private touchScrollStartY: number = 0;
+  private touchScrollStartX: number = 0;
+  private touchScrollActive: boolean = false;
+  private touchScrollLastX: number = 0;
+  private touchScrollLastY: number = 0;
+  private touchMoved: boolean = false;
+  private touchStartX: number = 0;
+  private touchStartY: number = 0;
+  private touchStartTs: number = 0;
+  private touchDragging: boolean = false;
+  private touchStartedOutside: boolean = false;
+  private touchScrollResidualY: number = 0;
+  private lastMouseMask: number = 0;
+  private lastMouseX: number = -1;
+  private lastMouseY: number = -1;
+  private ctrlPressed: boolean = false;
+  private edgeClampEnabled: boolean = true;
 
   private surfaceController: XComponentController = new XComponentController();
 
@@ -62,63 +91,115 @@ export struct RemoteDesktopSurface {
     this.colors = this.isDark ? DarkColors : LightColors;
   }
 
-  private getInputLayerId(): string {
-    return 'rdp_input_layer_' + this.sessionId;
-  }
+  private readonly rootStackKey: string = 'rdp_root_stack_' + this.sessionId;
+  private readonly inputLayerKey: string = 'rdp_input_layer_' + this.sessionId;
 
   private getSoftInputId(): string {
     return 'rdp_soft_input_' + this.sessionId;
   }
 
-  private getRenderMetrics(): RenderMetrics {
-    const viewportWidth: number = this.surfaceWidth > 0 ? this.surfaceWidth : this.snapshot.width;
-    const viewportHeight: number = this.surfaceHeight > 0 ? this.surfaceHeight : this.snapshot.height;
-    if (viewportWidth <= 0 || viewportHeight <= 0 || this.snapshot.width <= 0 || this.snapshot.height <= 0) {
-      return {
-        width: Math.max(1, viewportWidth),
-        height: Math.max(1, viewportHeight),
-        offsetX: 0,
-        offsetY: 0
-      };
+  private getBaseFitMetrics(): RenderMetrics {
+    const vw = this.surfaceWidth > 0 ? this.surfaceWidth : this.snapshot.width;
+    const vh = this.surfaceHeight > 0 ? this.surfaceHeight : this.snapshot.height;
+    if (vw <= 0 || vh <= 0 || this.snapshot.width <= 0 || this.snapshot.height <= 0) {
+      return { width: Math.max(1, vw), height: Math.max(1, vh), offsetX: 0, offsetY: 0 };
     }
-
-    const viewportRatio: number = viewportWidth / viewportHeight;
-    const snapshotRatio: number = this.snapshot.width / this.snapshot.height;
-
-    if (viewportRatio > snapshotRatio) {
-      const renderHeight: number = viewportHeight;
-      const renderWidth: number = renderHeight * snapshotRatio;
-      return {
-        width: Math.max(1, renderWidth),
-        height: Math.max(1, renderHeight),
-        offsetX: (viewportWidth - renderWidth) / 2,
-        offsetY: 0
-      };
+    const vr = vw / vh;
+    const sr = this.snapshot.width / this.snapshot.height;
+    if (vr > sr) {
+      const h = vh;
+      const w = h * sr;
+      return { width: w, height: h, offsetX: (vw - w) / 2, offsetY: 0 };
     }
+    const w = vw;
+    const h = w / sr;
+    return { width: w, height: h, offsetX: 0, offsetY: (vh - h) / 2 };
+  }
 
-    const renderWidth: number = viewportWidth;
-    const renderHeight: number = renderWidth / snapshotRatio;
+  private getTransformedRect(): RenderMetrics {
+    const base = this.getBaseFitMetrics();
+    const cx = this.surfaceWidth / 2;
+    const cy = this.surfaceHeight / 2;
+    const s = Math.max(0.01, this.zoomScale);
     return {
-      width: Math.max(1, renderWidth),
-      height: Math.max(1, renderHeight),
-      offsetX: 0,
-      offsetY: (viewportHeight - renderHeight) / 2
+      width: base.width * s,
+      height: base.height * s,
+      offsetX: cx + (base.offsetX - cx) * s + this.panOffsetX,
+      offsetY: cy + (base.offsetY - cy) * s + this.panOffsetY
+    };
+  }
+
+  private getRenderMetrics(): RenderMetrics {
+    return this.getTransformedRect();
+  }
+
+  private toBaseViewerPoint(x: number, y: number): RemotePoint {
+    if (this.zoomScale <= 1.0) {
+      return {
+        x: x - this.panOffsetX,
+        y: y - this.panOffsetY
+      };
+    }
+    const cx = this.surfaceWidth / 2;
+    const cy = this.surfaceHeight / 2;
+    const s = Math.max(0.01, this.zoomScale);
+    return {
+      x: cx + (x - cx - this.panOffsetX) / s,
+      y: cy + (y - cy - this.panOffsetY) / s
     };
   }
 
   private toRemotePoint(localX: number, localY: number): RemotePoint {
-    const metrics: RenderMetrics = this.getRenderMetrics();
-    const localFrameX: number = localX - metrics.offsetX;
-    const localFrameY: number = localY - metrics.offsetY;
-    const limitedX: number = Math.max(0, Math.min(Math.max(1, metrics.width) - 1, localFrameX));
-    const limitedY: number = Math.max(0, Math.min(Math.max(1, metrics.height) - 1, localFrameY));
+    const vw = this.surfaceWidth > 0 ? this.surfaceWidth : this.snapshot.width;
+    const vh = this.surfaceHeight > 0 ? this.surfaceHeight : this.snapshot.height;
 
-    const scaledX: number = Math.max(0, Math.min(this.snapshot.width - 1,
-      Math.round(limitedX * this.snapshot.width / Math.max(1, metrics.width))));
-    const scaledY: number = Math.max(0, Math.min(this.snapshot.height - 1,
-      Math.round(limitedY * this.snapshot.height / Math.max(1, metrics.height))));
+    if (vw <= 0 || vh <= 0 || this.snapshot.width <= 0 || this.snapshot.height <= 0) {
+      return { x: 0, y: 0 };
+    }
 
-    return { x: scaledX, y: scaledY };
+    const base = this.toBaseViewerPoint(localX, localY);
+    const x = base.x;
+    const y = base.y;
+
+    const frameW = vw;
+    const frameH = vh;
+    const sourceW = this.snapshot.width;
+    const sourceH = this.snapshot.height;
+
+    const scale = Math.min(frameW / sourceW, frameH / sourceH);
+    const contentW = sourceW * scale;
+    const contentH = sourceH * scale;
+    const offsetX = (frameW - contentW) / 2;
+    const offsetY = (frameH - contentH) / 2;
+
+    const rx = Math.max(0, Math.min(sourceW - 1, Math.floor((x - offsetX) / scale)));
+    const ry = Math.max(0, Math.min(sourceH - 1, Math.floor((y - offsetY) / scale)));
+
+    return { x: rx, y: ry };
+  }
+
+  private isLocalWithinContent(localX: number, localY: number): boolean {
+    if (this.snapshot.width <= 0 || this.snapshot.height <= 0) return true;
+    if (this.surfaceWidth <= 0 || this.surfaceHeight <= 0) return true;
+
+    const base = this.toBaseViewerPoint(localX, localY);
+    const x = base.x;
+    const y = base.y;
+
+    const frameW = this.surfaceWidth;
+    const frameH = this.surfaceHeight;
+    const sourceW = this.snapshot.width;
+    const sourceH = this.snapshot.height;
+
+    const scale = Math.min(frameW / sourceW, frameH / sourceH);
+    const contentW = sourceW * scale;
+    const contentH = sourceH * scale;
+    const offsetX = (frameW - contentW) / 2;
+    const offsetY = (frameH - contentH) / 2;
+
+    const rawX = (x - offsetX) / scale;
+    const rawY = (y - offsetY) / scale;
+    return rawX >= 0 && rawX < sourceW && rawY >= 0 && rawY < sourceH;
   }
 
   private mapMouseButton(button: number): number {
@@ -134,23 +215,37 @@ export struct RemoteDesktopSurface {
   private requestInputFocus(): void {
     try {
       const fc = this.getUIContext()?.getFocusController?.();
-      fc?.requestFocus?.(this.getSoftInputId());
+      fc?.requestFocus?.(this.rootStackKey);
+      fc?.requestFocus?.(this.inputLayerKey);
+      const ctrl = inputMethod.getController();
+      ctrl.hideTextInput().catch(() => {
+      });
     } catch (_error) {
     }
-    try {
-      const controller = inputMethod.getController();
-      controller.showTextInput();
-    } catch (e) {
-      console.warn(`Failed to show soft keyboard: ${e}`);
-    }
+  }
+
+  private focusSoftInputLater(): void {
+    setTimeout(() => {
+      try {
+        const fc = this.getUIContext()?.getFocusController?.();
+        fc?.requestFocus?.(this.getSoftInputId());
+      } catch (_error) {
+      }
+    }, 0);
   }
 
   private showSoftKeyboard(): void {
     if (this.stage !== SessionStage.Connected) {
       return;
     }
+    this.focusSoftInputLater();
     setTimeout(() => {
-      this.requestInputFocus();
+      try {
+        const controller = inputMethod.getController();
+        controller.showTextInput();
+      } catch (e) {
+        console.warn(`Failed to show soft keyboard: ${e}`);
+      }
     }, 0);
   }
 
@@ -227,6 +322,10 @@ export struct RemoteDesktopSurface {
   }
 
   private handleKey(event: KeyEvent): void {
+    if (event.keyCode === 2072 || event.keyCode === 2073) {
+      this.ctrlPressed = event.type === KeyType.Down;
+    }
+
     if (this.stage !== SessionStage.Connected) {
       return;
     }
@@ -248,21 +347,247 @@ export struct RemoteDesktopSurface {
     }
   }
 
+  private getTouchCenter(event: TouchEvent): RemotePoint | null {
+    const touches = event.touches;
+    if (!touches || touches.length < 2) {
+      return null;
+    }
+    const t0 = touches[0];
+    const t1 = touches[1];
+    return {
+      x: (t0.x + t1.x) / 2,
+      y: (t0.y + t1.y) / 2
+    };
+  }
+
+  private beginTouchScroll(localX: number, localY: number): void {
+    if (this.touchDragging) {
+      const p = this.toRemotePoint(this.touchStartX, this.touchStartY);
+      this.touchDragging = false;
+      this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+    }
+    this.touchMoved = true;
+    this.touchScrollActive = true;
+    this.touchScrollStartX = localX;
+    this.touchScrollStartY = localY;
+    this.touchScrollLastX = localX;
+    this.touchScrollLastY = localY;
+    this.touchScrollResidualY = 0;
+    this.requestInputFocus();
+  }
+
+  private endTouchScroll(): void {
+    this.touchScrollActive = false;
+    this.touchScrollResidualY = 0;
+  }
+
+  private emitTouchScroll(localX: number, localY: number, deltaY: number): void {
+    if (deltaY === 0) return;
+    const stepPx = 40;
+    this.touchScrollResidualY += deltaY;
+    let clicks = 0;
+    while (Math.abs(this.touchScrollResidualY) >= stepPx && clicks < 20) {
+      if (this.touchScrollResidualY > 0) {
+        this.touchScrollResidualY -= stepPx;
+      } else {
+        this.touchScrollResidualY += stepPx;
+      }
+      clicks++;
+    }
+    if (clicks <= 0) return;
+    const p = this.toRemotePoint(localX, localY);
+    const delta = deltaY > 0 ? -120 : 120;
+    for (let i = 0; i < clicks; i++) {
+      this.onMouseWheel(p.x, p.y, delta);
+    }
+  }
+
   private handleTouch(event: TouchEvent): void {
     if (this.stage !== SessionStage.Connected || event.changedTouches.length < 1) {
       return;
     }
 
     const touch = event.changedTouches[0];
-    const point: RemotePoint = this.toRemotePoint(touch.x, touch.y);
-    this.onMouseMove(point.x, point.y);
+    const localX = touch.x;
+    const localY = touch.y;
+    const type = touch.type;
 
-    if (touch.type === TouchType.Down) {
-      this.requestInputFocus();
-      this.onMouseButton(point.x, point.y, PTR_FLAGS_BUTTON1, true);
-    } else if (touch.type === TouchType.Up || touch.type === TouchType.Cancel) {
-      this.onMouseButton(point.x, point.y, PTR_FLAGS_BUTTON1, false);
+    const withinContent = this.isLocalWithinContent(localX, localY);
+    if (!withinContent && !this.edgeClampEnabled) {
+      if (this.touchDragging) {
+        const p = this.toRemotePoint(this.touchStartX, this.touchStartY);
+        this.touchDragging = false;
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+      }
+      this.touchDragging = false;
+      this.touchMoved = false;
+      this.touchStartedOutside = false;
+      this.endTouchScroll();
+      return;
     }
+
+    if (type === TouchType.Down) this.requestInputFocus();
+
+    const center = this.getTouchCenter(event);
+    if (center) {
+      if (!this.touchScrollActive || type === TouchType.Down) {
+        this.beginTouchScroll(center.x, center.y);
+      }
+      if (type === TouchType.Move) {
+        const dy = center.y - this.touchScrollLastY;
+        this.emitTouchScroll(center.x, center.y, dy);
+        this.touchScrollLastX = center.x;
+        this.touchScrollLastY = center.y;
+      }
+      return;
+    }
+
+    if (this.touchScrollActive) {
+      if (type === TouchType.Move || type === TouchType.Up || type === TouchType.Cancel) {
+        this.endTouchScroll();
+      }
+      if (type !== TouchType.Down) return;
+    }
+
+    const p = this.toRemotePoint(localX, localY);
+    const now = Date.now();
+
+    if (type === TouchType.Down) {
+      this.touchStartX = localX;
+      this.touchStartY = localY;
+      this.touchStartTs = now;
+      this.touchMoved = false;
+      this.touchDragging = false;
+      this.touchStartedOutside = !withinContent;
+      this.onMouseMove(p.x, p.y);
+      return;
+    }
+
+    if (type === TouchType.Move) {
+      if (this.touchStartedOutside) {
+        this.onMouseMove(p.x, p.y);
+        return;
+      }
+      const dx = Math.abs(localX - this.touchStartX);
+      const dy = Math.abs(localY - this.touchStartY);
+      if (dx + dy >= 10) this.touchMoved = true;
+      if (this.touchMoved && !this.touchDragging) {
+        this.touchDragging = true;
+        const startP = this.toRemotePoint(this.touchStartX, this.touchStartY);
+        this.onMouseMove(startP.x, startP.y);
+        this.onMouseButton(startP.x, startP.y, PTR_FLAGS_BUTTON1, true);
+      }
+      this.onMouseMove(p.x, p.y);
+      return;
+    }
+
+    if (type === TouchType.Up) {
+      const dt = now - this.touchStartTs;
+      if (this.touchStartedOutside) {
+        this.onMouseMove(p.x, p.y);
+      } else if (this.touchDragging) {
+        this.touchDragging = false;
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+      } else if (!this.touchMoved && dt <= 350) {
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, true);
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+      } else if (!this.touchMoved && dt > 500) {
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON2, true);
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON2, false);
+      } else {
+        this.onMouseMove(p.x, p.y);
+      }
+      this.touchDragging = false;
+      this.touchStartedOutside = false;
+      return;
+    }
+
+    if (type === TouchType.Cancel) {
+      if (this.touchDragging) {
+        this.touchDragging = false;
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+      }
+      this.touchStartedOutside = false;
+      this.endTouchScroll();
+    }
+  }
+
+  private resetZoom(): void {
+    this.zoomScale = 1.0;
+    this.panOffsetX = 0;
+    this.panOffsetY = 0;
+    this.onScaleChange(1.0);
+  }
+
+  private applyZoomStep(step: number, centerX: number, centerY: number): void {
+    const newScale: number = Math.max(0.5, Math.min(3.0, this.zoomScale + step));
+    if (Math.abs(newScale - this.zoomScale) > 0.001) {
+      const cx = this.surfaceWidth / 2;
+      const cy = this.surfaceHeight / 2;
+      const scaleRatio: number = newScale / Math.max(0.01, this.zoomScale);
+      this.panOffsetX = centerX - cx - scaleRatio * (centerX - cx - this.panOffsetX);
+      this.panOffsetY = centerY - cy - scaleRatio * (centerY - cy - this.panOffsetY);
+      this.zoomScale = newScale;
+      this.onScaleChange(newScale);
+    }
+  }
+
+  onZoomInTriggered(): void {
+    if (this.zoomInToken > 0) {
+      this.applyZoomStep(0.12, this.surfaceWidth / 2, this.surfaceHeight / 2);
+    }
+  }
+
+  onZoomOutTriggered(): void {
+    if (this.zoomOutToken > 0) {
+      this.applyZoomStep(-0.12, this.surfaceWidth / 2, this.surfaceHeight / 2);
+    }
+  }
+
+  onZoomResetTriggered(): void {
+    if (this.zoomResetToken > 0) {
+      this.resetZoom();
+    }
+  }
+
+  onPanUpTriggered(): void {
+    if (this.panUpToken > 0) {
+      const panStep = 100;
+      this.panOffsetY += panStep;
+      this.clampPanOffset();
+    }
+  }
+
+  onPanDownTriggered(): void {
+    if (this.panDownToken > 0) {
+      const panStep = 100;
+      this.panOffsetY -= panStep;
+      this.clampPanOffset();
+    }
+  }
+
+  onPanLeftTriggered(): void {
+    if (this.panLeftToken > 0) {
+      const panStep = 100;
+      this.panOffsetX += panStep;
+      this.clampPanOffset();
+    }
+  }
+
+  onPanRightTriggered(): void {
+    if (this.panRightToken > 0) {
+      const panStep = 100;
+      this.panOffsetX -= panStep;
+      this.clampPanOffset();
+    }
+  }
+
+  private clampPanOffset(): void {
+    const tr = this.getTransformedRect();
+    const maxPanX = Math.max(0, (tr.width - this.surfaceWidth) / 2);
+    const maxPanY = Math.max(0, (tr.height - this.surfaceHeight) / 2);
+    this.panOffsetX = Math.max(-maxPanX, Math.min(maxPanX, this.panOffsetX));
+    this.panOffsetY = Math.max(-maxPanY, Math.min(maxPanY, this.panOffsetY));
   }
 
   private handleMouse(event?: MouseEvent): void {
@@ -270,21 +595,96 @@ export struct RemoteDesktopSurface {
       return;
     }
 
-    const point: RemotePoint = this.toRemotePoint(event.x, event.y);
-    if (event.action === MouseAction.Move) {
-      this.onMouseMove(point.x, point.y);
+    const localX = event.x;
+    const localY = event.y;
+    this.lastMouseX = localX;
+    this.lastMouseY = localY;
+
+    const action = event.action;
+    const button = event.button;
+
+    const left = 1;
+    const middle = 2;
+    const right = 4;
+    let bit = 0;
+    if (button === MouseButton.Left) bit = left;
+    else if (button === MouseButton.Middle) bit = middle;
+    else if (button === MouseButton.Right) bit = right;
+
+    if (!this.isLocalWithinContent(localX, localY) && !this.edgeClampEnabled) {
+      if (this.lastMouseMask !== 0) {
+        this.lastMouseMask = 0;
+        const p = this.toRemotePoint(localX, localY);
+        this.onMouseMove(p.x, p.y);
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON2, false);
+        this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON3, false);
+      }
       return;
     }
 
-    if (event.action === MouseAction.Press) {
+    const mouseOutside = this.edgeClampEnabled && !this.isLocalWithinContent(localX, localY);
+
+    if (!mouseOutside) {
+      if (action === MouseAction.Press) {
+        this.lastMouseMask |= bit;
+      }
+      if (action === MouseAction.Release) {
+        this.lastMouseMask &= ~bit;
+      }
+    }
+
+    if (action === MouseAction.Press) {
       this.requestInputFocus();
-      this.onMouseButton(point.x, point.y, this.mapMouseButton(event.button), true);
+    }
+
+    const point: RemotePoint = this.toRemotePoint(localX, localY);
+    this.onMouseMove(point.x, point.y);
+
+    if (!mouseOutside) {
+      if (action === MouseAction.Press) {
+        this.onMouseButton(point.x, point.y, this.mapMouseButton(button), true);
+      } else if (action === MouseAction.Release) {
+        this.onMouseButton(point.x, point.y, this.mapMouseButton(button), false);
+      }
+    } else if (this.lastMouseMask !== 0) {
+      this.lastMouseMask = 0;
+      this.onMouseButton(point.x, point.y, PTR_FLAGS_BUTTON1, false);
+      this.onMouseButton(point.x, point.y, PTR_FLAGS_BUTTON2, false);
+      this.onMouseButton(point.x, point.y, PTR_FLAGS_BUTTON3, false);
+    }
+  }
+
+  private handleAxis(event: AxisEvent): void {
+    if (this.stage !== SessionStage.Connected) {
       return;
     }
 
-    if (event.action === MouseAction.Release) {
-      this.onMouseButton(point.x, point.y, this.mapMouseButton(event.button), false);
+    const axisX = event.x ?? this.lastMouseX;
+    const axisY = event.y ?? this.lastMouseY;
+
+    if (!this.isLocalWithinContent(axisX, axisY)) {
+      return;
     }
+
+    let dy: number = 0;
+    if (typeof event.getVerticalAxisValue === 'function') {
+      dy = event.getVerticalAxisValue();
+    } else if (event.scrollStep !== undefined) {
+      dy = event.scrollStep;
+    }
+
+    if (dy === 0) {
+      return;
+    }
+
+    if (this.ctrlPressed) {
+      this.applyZoomStep(dy < 0 ? -0.12 : 0.12, axisX, axisY);
+      return;
+    }
+
+    const point: RemotePoint = this.toRemotePoint(axisX, axisY);
+    this.onMouseWheel(point.x, point.y, dy < 0 ? -120 : 120);
   }
 
   private releasePixelMap(): void {
@@ -367,9 +767,6 @@ export struct RemoteDesktopSurface {
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
     this.setSurfaceId('');
-    setTimeout(() => {
-      this.requestInputFocus();
-    }, 0);
     this.refreshTimer = setInterval(() => {
       this.refreshPixelMap();
     }, 120);
@@ -388,9 +785,14 @@ export struct RemoteDesktopSurface {
     Stack() {
       if (this.framePixelMap !== null) {
         Image(this.framePixelMap)
-          .width('100%')
-          .height('100%')
-          .objectFit(ImageFit.Contain)
+          .width(this.getTransformedRect().width)
+          .height(this.getTransformedRect().height)
+          .position({
+            x: this.getTransformedRect().offsetX,
+            y: this.getTransformedRect().offsetY
+          })
+          .interpolation(ImageInterpolation.High)
+          .objectFit(ImageFit.Fill)
       } else if (this.stage === SessionStage.Connecting) {
         Column({ space: 12 }) {
           LoadingProgress()
@@ -409,29 +811,47 @@ export struct RemoteDesktopSurface {
           .fontSize(14)
       }
 
-      Column() {
+      if (this.stage === SessionStage.Connected) {
+        Column()
+          .id(this.inputLayerKey)
+          .width('100%')
+          .height('100%')
+          .backgroundColor('rgba(0,0,0,0.001)')
+          .focusable(true)
+          .focusOnTouch(false)
+          .defaultFocus(true)
+          .onAppear(() => {
+            if (this.stage !== SessionStage.Connected) return;
+            this.requestInputFocus();
+          })
+          .onAreaChange((oldValue: Area, newValue: Area) => {
+            const newWidth = Number(newValue.width);
+            const newHeight = Number(newValue.height);
+            if (newWidth > 0 && newHeight > 0) {
+              this.surfaceWidth = newWidth;
+              this.surfaceHeight = newHeight;
+              this.onSurfaceSizeChange(newWidth, newHeight);
+            }
+          })
+          .onTouch((event: TouchEvent) => {
+            this.handleTouch(event);
+          })
+          .onMouse((event?: MouseEvent) => {
+            this.handleMouse(event);
+          })
+          .onHover((isHover: boolean) => {
+            if (!isHover && this.lastMouseMask !== 0) {
+              const p = this.toRemotePoint(this.lastMouseX, this.lastMouseY);
+              this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON1, false);
+              this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON2, false);
+              this.onMouseButton(p.x, p.y, PTR_FLAGS_BUTTON3, false);
+              this.lastMouseMask = 0;
+            }
+          })
+          .onAxisEvent((event: AxisEvent) => {
+            this.handleAxis(event);
+          })
       }
-      .id(this.getInputLayerId())
-      .width('100%')
-      .height('100%')
-      .backgroundColor('rgba(0,0,0,0.001)')
-      .focusable(true)
-      .focusOnTouch(true)
-      .defaultFocus(true)
-      .onAppear(() => {
-        if (this.stage === SessionStage.Connected) {
-          this.requestInputFocus();
-        }
-      })
-      .onTouch((event: TouchEvent) => {
-        this.handleTouch(event);
-      })
-      .onMouse((event?: MouseEvent) => {
-        this.handleMouse(event);
-      })
-      .onKeyEvent((event: KeyEvent) => {
-        this.handleKey(event);
-      })
 
       if (this.stage === SessionStage.Connected) {
         TextInput({ text: this.softInputDraft, placeholder: '' })
@@ -445,7 +865,7 @@ export struct RemoteDesktopSurface {
           .backgroundColor(Color.Transparent)
           .position({ x: -100, y: -100 })
           .focusable(true)
-          .focusOnTouch(true)
+          .focusOnTouch(false)
           .type(InputType.Normal)
           .onChange((value: string) => {
             this.handleSoftInputChange(value);
@@ -461,11 +881,19 @@ export struct RemoteDesktopSurface {
           })
       }
     }
+    .id(this.rootStackKey)
     .width('100%')
     .height('100%')
     .backgroundColor(this.colors.background)
     .borderRadius(this.isFullscreen ? 0 : 18)
     .clip(true)
+    .focusable(true)
+    .focusOnTouch(false)
+    .defaultFocus(true)
+    .onKeyEvent((event: KeyEvent) => {
+      this.handleKey(event);
+      return true;
+    })
     .onAreaChange((_, newValue) => {
       this.surfaceWidth = Number(newValue.width);
       this.surfaceHeight = Number(newValue.height);

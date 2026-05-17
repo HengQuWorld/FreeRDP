@@ -217,6 +217,7 @@ class I18nManager {
     s['security_mode'] = '安全模式';
     s['security_auto'] = '自动';
     s['clipboard_bidirectional'] = '双向剪贴板';
+    s['graphics_pipeline_gfx'] = 'Graphics Pipeline (GFX)';
     s['save_config'] = '保存配置';
     s['connect_desktop'] = '连接桌面';
     s['cert_verify'] = '证书验证';

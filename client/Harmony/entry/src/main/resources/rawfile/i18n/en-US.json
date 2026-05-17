@@ -23,8 +23,6 @@
     "gateway_username_placeholder": "Gateway Username",
     "gateway_domain_placeholder": "Gateway Domain",
     "gateway_password_placeholder": "Gateway Password",
-    "security_mode": "Security Mode",
-    "security_auto": "Auto",
     "clipboard_bidirectional": "Bidirectional Clipboard",
     "save_config": "Save Config",
     "connect_desktop": "Connect",

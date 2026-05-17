@@ -13,11 +13,14 @@ export interface SessionRecord {
 }
 
 type SessionChangedCallback = () => void;
+type CertCommonNameDiscoveredCallback = (sessionId: number, cn: string) => void;
 
 class SessionManagerImpl {
   private sessions: Map<number, SessionRecord> = new Map();
   private refreshTimers: Map<number, number> = new Map();
   private listeners: Set<SessionChangedCallback> = new Set();
+  private cnDiscoveredListeners: Set<CertCommonNameDiscoveredCallback> = new Set();
+  private cnNotifiedSessionIds: Set<number> = new Set();
   private lastObservedFrameSequences: Map<number, number> = new Map();
 
   onChanged(callback: SessionChangedCallback): () => void {
@@ -27,9 +30,22 @@ class SessionManagerImpl {
     };
   }
 
+  onCertCommonNameDiscovered(callback: CertCommonNameDiscoveredCallback): () => void {
+    this.cnDiscoveredListeners.add(callback);
+    return () => {
+      this.cnDiscoveredListeners.delete(callback);
+    };
+  }
+
   private notifyChanged(): void {
     this.listeners.forEach((callback: SessionChangedCallback) => {
       callback();
+    });
+  }
+
+  private notifyCnDiscovered(sessionId: number, cn: string): void {
+    this.cnDiscoveredListeners.forEach((callback: CertCommonNameDiscoveredCallback) => {
+      callback(sessionId, cn);
     });
   }
 
@@ -39,7 +55,8 @@ class SessionManagerImpl {
       stage: SessionStage.Idle,
       title: profile.name.length > 0 ? profile.name : profile.host,
       message: '尚未连接',
-      profile: cloneProfile(profile)
+      profile: cloneProfile(profile),
+      certCommonName: ''
     };
   }
 
@@ -78,7 +95,8 @@ class SessionManagerImpl {
       stage: SessionStage.Connecting,
       title: record.state.title,
       message: '正在连接远程桌面...',
-      profile: record.state.profile
+      profile: record.state.profile,
+      certCommonName: ''
     };
     record.state = connectingState;
     this.notifyChanged();
@@ -88,13 +106,18 @@ class SessionManagerImpl {
       record.state = connectedState;
       record.snapshot = sessionBridge.getSnapshot(sessionId);
       this.lastObservedFrameSequences.set(sessionId, record.snapshot.frameSequence);
+      if (connectedState.certCommonName.length > 0 && !this.cnNotifiedSessionIds.has(sessionId)) {
+        this.cnNotifiedSessionIds.add(sessionId);
+        this.notifyCnDiscovered(sessionId, connectedState.certCommonName);
+      }
     } catch (e) {
       record.state = {
         sessionId: sessionId,
         stage: SessionStage.Error,
         title: profile.name.length > 0 ? profile.name : profile.host,
         message: '连接失败: ' + (e as Error).message,
-        profile: cloneProfile(profile)
+        profile: cloneProfile(profile),
+        certCommonName: ''
       };
     }
 
@@ -121,7 +144,8 @@ class SessionManagerImpl {
       stage: SessionStage.Disconnected,
       title: record.state.title,
       message: '连接已断开',
-      profile: record.state.profile
+      profile: record.state.profile,
+      certCommonName: record.state.certCommonName
     };
     this.notifyChanged();
   }
@@ -130,6 +154,7 @@ class SessionManagerImpl {
     this.stopEventPolling(sessionId);
     this.sessions.delete(sessionId);
     this.lastObservedFrameSequences.delete(sessionId);
+    this.cnNotifiedSessionIds.delete(sessionId);
     this.notifyChanged();
   }
 
@@ -294,7 +319,13 @@ class SessionManagerImpl {
 
     if (shouldRefreshState) {
       try {
-        record.state = sessionBridge.getState(sessionId);
+        const newState: SessionState = sessionBridge.getState(sessionId);
+        if (!this.cnNotifiedSessionIds.has(sessionId) &&
+            newState.certCommonName.length > 0) {
+          this.cnNotifiedSessionIds.add(sessionId);
+          this.notifyCnDiscovered(sessionId, newState.certCommonName);
+        }
+        record.state = newState;
       } catch (_e) {
       }
     }

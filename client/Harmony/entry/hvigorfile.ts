@@ -14,8 +14,14 @@ function customBuildInfoPlugin(): HvigorPlugin {
             const gitDescribe = childProcess.execSync('git describe --tags --always --dirty', { encoding: 'utf-8' }).trim();
             const buildInfoPath = path.join(__dirname, 'src/main/ets/utils/BuildInfo.ets');
             const content = `export const BUILD_VERSION: string = '${gitDescribe}';\n`;
-            fs.writeFileSync(buildInfoPath, content, { encoding: 'utf-8' });
-            console.log(`[customBuildInfoPlugin] Generated BuildInfo.ets with version: ${gitDescribe}`);
+            
+            const existing = fs.existsSync(buildInfoPath) ? fs.readFileSync(buildInfoPath, 'utf-8') : '';
+            if (existing !== content) {
+              fs.writeFileSync(buildInfoPath, content, { encoding: 'utf-8' });
+              console.log(`[customBuildInfoPlugin] Updated BuildInfo.ets: ${gitDescribe}`);
+            } else {
+              console.log(`[customBuildInfoPlugin] BuildInfo.ets unchanged: ${gitDescribe}`);
+            }
           } catch (e) {
             console.warn('[customBuildInfoPlugin] Failed to generate build info:', e);
           }

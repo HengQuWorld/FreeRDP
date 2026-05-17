@@ -17,6 +17,7 @@ export interface ConnectionProfile {
   enableClipboard: boolean;
   enableAudio: boolean;
   enableDrive: boolean;
+  enableGfx: boolean;
 }
 
 export function createEmptyProfile(id: string): ConnectionProfile {
@@ -38,7 +39,8 @@ export function createEmptyProfile(id: string): ConnectionProfile {
     appDataDir: '',
     enableClipboard: true,
     enableAudio: false,
-    enableDrive: false
+    enableDrive: false,
+    enableGfx: true
   };
 }
 
@@ -61,6 +63,7 @@ export function cloneProfile(profile: ConnectionProfile): ConnectionProfile {
     appDataDir: profile.appDataDir,
     enableClipboard: profile.enableClipboard,
     enableAudio: profile.enableAudio,
-    enableDrive: profile.enableDrive
+    enableDrive: profile.enableDrive,
+    enableGfx: profile.enableGfx
   };
 }

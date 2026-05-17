@@ -30,6 +30,9 @@
 #include <winpr/input.h>
 #include <winpr/synch.h>
 #include <winpr/wlog.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/bio.h>
 
 #define TAG CLIENT_TAG("harmony.native")
 
@@ -434,7 +437,8 @@ static BOOL HarmonyPreConnect(freerdp* instance) {
   }
 
   rdpSettings* settings = instance->context->settings;
-  if (!freerdp_settings_set_bool(settings, FreeRDP_CertificateCallbackPreferPEM, TRUE) ||
+  if (!freerdp_settings_set_bool(settings, FreeRDP_ExternalCertificateManagement, TRUE) ||
+      !freerdp_settings_set_bool(settings, FreeRDP_CertificateCallbackPreferPEM, TRUE) ||
       !freerdp_settings_set_uint32(settings, FreeRDP_OsMajorType, OSMAJORTYPE_UNIX) ||
       !freerdp_settings_set_uint32(settings, FreeRDP_OsMinorType, OSMINORTYPE_NATIVE_XSERVER)) {
     return FALSE;
@@ -539,6 +543,10 @@ static DWORD HarmonyVerifyCertificateEx(freerdp* instance, const char* host, UIN
     return 0;
   }
 
+  if (common_name != nullptr && common_name[0] != '\0') {
+    session->SetCertificateCommonName(common_name);
+  }
+
   return session->VerifyCertificate(host, port, common_name, subject, issuer, fingerprint, flags) ? 2U : 0U;
 }
 
@@ -558,6 +566,71 @@ static DWORD HarmonyVerifyChangedCertificateEx(
   return session->VerifyChangedCertificate(host, port, common_name, subject, issuer,
                                            new_fingerprint, old_subject, old_issuer,
                                            old_fingerprint, flags) ? 2U : 0U;
+}
+
+static std::string ExtractCommonName(const BYTE* data, size_t length) {
+  if ((data == nullptr) || (length == 0)) {
+    return "";
+  }
+
+  BIO* bio = BIO_new_mem_buf(data, static_cast<int>(length));
+  if (bio == nullptr) {
+    return "";
+  }
+
+  X509* x509 = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+  if (x509 == nullptr) {
+    (void)BIO_reset(bio);
+    x509 = d2i_X509_bio(bio, nullptr);
+  }
+  BIO_free(bio);
+
+  if (x509 == nullptr) {
+    return "";
+  }
+
+  X509_NAME* subject = X509_get_subject_name(x509);
+  if (subject == nullptr) {
+    X509_free(x509);
+    return "";
+  }
+
+  char cn[256];
+  int len = X509_NAME_get_text_by_NID(subject, NID_commonName, cn, static_cast<int>(sizeof(cn) - 1));
+  X509_free(x509);
+
+  if (len <= 0) {
+    return "";
+  }
+  return std::string(cn, static_cast<size_t>(len));
+}
+
+static int HarmonyVerifyX509Certificate(freerdp* instance, const BYTE* data, size_t length,
+                                        const char* hostname, UINT16 port, DWORD flags) {
+  WINPR_UNUSED(port);
+  WINPR_UNUSED(flags);
+
+  if ((instance == nullptr) || (instance->context == nullptr)) {
+    return 0;
+  }
+
+  FreeRDPHarmonySession* session = SessionFromContext(instance->context);
+  if (session == nullptr) {
+    return 0;
+  }
+
+  if (session->ShouldIgnoreCertificate()) {
+    return 1;
+  }
+
+  std::string cn = ExtractCommonName(data, length);
+  if (!cn.empty()) {
+    session->SetCertificateCommonName(cn);
+  } else if ((hostname != nullptr) && (hostname[0] != '\0')) {
+    session->SetCertificateCommonName(hostname);
+  }
+
+  return 0;
 }
 
 static int HarmonyLogonErrorInfo(freerdp* instance, UINT32 data, UINT32 type) {
@@ -628,6 +701,7 @@ static BOOL HarmonyClientNew(freerdp* instance, rdpContext* context) {
   instance->AuthenticateEx = HarmonyAuthenticateEx;
   instance->VerifyCertificateEx = HarmonyVerifyCertificateEx;
   instance->VerifyChangedCertificateEx = HarmonyVerifyChangedCertificateEx;
+  instance->VerifyX509Certificate = HarmonyVerifyX509Certificate;
   instance->LogonErrorInfo = HarmonyLogonErrorInfo;
   return TRUE;
 }
@@ -1011,6 +1085,11 @@ bool FreeRDPHarmonySession::VerifyCertificate(const char* host, std::uint16_t po
                                               const char* commonName, const char* subject,
                                               const char* issuer, const char* fingerprint,
                                               std::uint32_t flags) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    info_.certCommonName = (commonName != nullptr) ? commonName : "";
+  }
+
   if (config_.ignoreCertificate) {
     return true;
   }
@@ -1042,6 +1121,11 @@ bool FreeRDPHarmonySession::VerifyChangedCertificate(const char* host, std::uint
                                                      const char* issuer, const char* newFingerprint,
                                                      const char* oldSubject, const char* oldIssuer,
                                                      const char* oldFingerprint, std::uint32_t flags) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    info_.certCommonName = (commonName != nullptr) ? commonName : "";
+  }
+
   if (config_.ignoreCertificate) {
     return true;
   }
@@ -1082,6 +1166,14 @@ void FreeRDPHarmonySession::SubmitCert(bool accept) {
   certAccepted_ = accept;
   dialogAnswered_ = true;
   dialogCV_.notify_all();
+}
+
+void FreeRDPHarmonySession::SetCertificateCommonName(const std::string& cn) {
+  if (cn.empty()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  info_.certCommonName = cn;
 }
 
 bool FreeRDPHarmonySession::SendMouseMove(std::uint16_t x, std::uint16_t y) {
@@ -1491,7 +1583,7 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
     outError = "set FreeRDP_DesktopResize failed";
     return false;
   }
-  if (!freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, TRUE)) {
+  if (!freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, config_.enableGfx ? FALSE : TRUE)) {
     outError = "set FreeRDP_SoftwareGdi failed";
     return false;
   }
@@ -1547,9 +1639,15 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   args.emplace_back("/size:" + std::to_string(desktopWidth) + "x" +
                     std::to_string(desktopHeight));
   args.emplace_back("/bpp:32");
-  args.emplace_back("/gfx");
+  if (config_.enableGfx) {
+    args.emplace_back("/gfx");
+  }
   args.emplace_back("/network:auto");
+  args.emplace_back("-multitransport");
   args.emplace_back("/dynamic-resolution");
+  if (config_.ignoreCertificate) {
+    args.emplace_back("/cert:ignore");
+  }
   args.emplace_back("/log-level:TRACE");
   args.emplace_back(config_.enableClipboard ? "/clipboard" : "-clipboard");
 
@@ -1565,9 +1663,6 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   }
 
   args.emplace_back("/kbd:unicode:on");
-  if (config_.ignoreCertificate) {
-    args.emplace_back("/cert:ignore");
-  }
 
   return args;
 }

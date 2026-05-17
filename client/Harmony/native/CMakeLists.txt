@@ -33,7 +33,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "OHOS")
     "-Wl,--no-whole-archive"
   )
 
-  add_dependencies(freerdp_harmony_bridge freerdp)
+  if(TARGET freerdp)
+    add_dependencies(freerdp_harmony_bridge freerdp)
+  endif()
 
 else()
   set(FREERDP_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/freerdp-root-build)
@@ -72,4 +74,12 @@ else()
   )
 
   target_link_libraries(freerdp_harmony_bridge PRIVATE freerdp-client freerdp winpr)
+
+  add_executable(test_cmdline test_cmdline.cpp)
+  target_include_directories(
+    test_cmdline
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${FREERDP_ROOT_DIR}/include ${FREERDP_ROOT_DIR}/winpr/include
+            ${FREERDP_BINARY_DIR} ${FREERDP_BINARY_DIR}/include ${FREERDP_BINARY_DIR}/winpr/include
+  )
+  target_link_libraries(test_cmdline PRIVATE freerdp-client freerdp winpr)
 endif()

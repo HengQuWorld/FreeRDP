@@ -101,8 +101,55 @@ detect_native_changes() {
   fi
 }
 
+clean_bridge_only() {
+  log "Performing incremental clean (bridge layer only)"
+  
+  local cmake_intermediates="${PROJECT_DIR}/entry/build/default/intermediates/cmake"
+  local cmake_outputs="${PROJECT_DIR}/entry/build/default/outputs"
+  
+  if [[ -d "${cmake_intermediates}" ]]; then
+    log "Removing CMake intermediates: ${cmake_intermediates}"
+    rm -rf "${cmake_intermediates}"
+  fi
+  
+  if [[ -d "${cmake_outputs}" ]]; then
+    log "Removing CMake outputs: ${cmake_outputs}"
+    rm -rf "${cmake_outputs}"
+  fi
+  
+  local entry_build="${PROJECT_DIR}/entry/build"
+  if [[ -d "${entry_build}" ]]; then
+    find "${entry_build}" -name "*.so" -type f -delete 2>/dev/null || true
+    find "${entry_build}" -name "CMakeCache.txt" -type f -delete 2>/dev/null || true
+    find "${entry_build}" -name "cmake_install.cmake" -type f -delete 2>/dev/null || true
+    find "${entry_build}" -type d -name "CMakeFiles" -exec rm -rf {} + 2>/dev/null || true
+  fi
+  
+  log "Bridge layer cleaned, OpenSSL/FreeRDP cache preserved"
+}
+
+clean_full() {
+  log "Performing full clean"
+  
+  local sdk_dir
+  local hvigor_bin
+
+  sdk_dir="$(resolve_sdk_dir)"
+  hvigor_bin="$(resolve_hvigor_bin "${sdk_dir}")"
+
+  (
+    cd "${PROJECT_DIR}"
+    env -u DEVECO_SDK_HOME -u HOS_SDK_HOME -u OHOS_SDK_HOME -u OHOS_BASE_SDK_HOME \
+      DEVECO_SDK_HOME="${sdk_dir}" \
+      "${hvigor_bin}" clean
+  )
+  
+  log "Full clean completed"
+}
+
 build() {
   local mode="$1"
+  local force_clean="${2:-false}"
 
   local sdk_dir
   local hvigor_bin
@@ -118,18 +165,17 @@ build() {
   echo "${mode}" > "${mode_file}"
   trap "rm -f '${mode_file}'" RETURN
 
-  local native_changes
-  native_changes="$(detect_native_changes)"
+  if [[ "${force_clean}" == "true" ]]; then
+    clean_full
+  else
+    local native_changes
+    native_changes="$(detect_native_changes)"
 
-  if [[ -n "${native_changes}" ]]; then
-    log "Native/CMake changes detected, running clean first"
-    printf '%s\n' "${native_changes}"
-    (
-      cd "${PROJECT_DIR}"
-      env -u DEVECO_SDK_HOME -u HOS_SDK_HOME -u OHOS_SDK_HOME -u OHOS_BASE_SDK_HOME \
-        DEVECO_SDK_HOME="${sdk_dir}" \
-        "${hvigor_bin}" clean
-    )
+    if [[ -n "${native_changes}" ]]; then
+      log "Native/CMake changes detected:"
+      printf '%s\n' "${native_changes}"
+      clean_bridge_only
+    fi
   fi
 
   log "Building HarmonyOS application package (${mode})"
@@ -165,29 +211,62 @@ build() {
 }
 
 print_usage() {
-  printf 'Usage: %s [debug|release|--release]\n' "${0##*/}"
+  printf 'Usage: %s [OPTIONS] [debug|release]\n' "${0##*/}"
   printf '\n'
+  printf 'Build modes:\n'
   printf '  debug        Build debug package (default)\n'
   printf '  release      Build release package\n'
-  printf '  --release    Same as release\n'
+  printf '\n'
+  printf 'Options:\n'
+  printf '  --clean      Force full clean before build\n'
+  printf '  --clean-bridge  Clean only bridge layer (preserve OpenSSL/FreeRDP cache)\n'
+  printf '  -h, --help   Show this help message\n'
+  printf '\n'
+  printf 'Environment variables:\n'
+  printf '  FORCE_REBUILD_OPENSSL=1   Force rebuild OpenSSL\n'
+  printf '  FORCE_REBUILD_FREERDP=1   Force rebuild FreeRDP\n'
 }
 
 main() {
   local build_mode="debug"
+  local force_clean="false"
+  local do_clean_bridge="false"
 
-  if [[ "${1:-}" == "release" || "${1:-}" == "--release" ]]; then
-    build_mode="release"
-  elif [[ "${1:-}" == "debug" || "${1:-}" == "" ]]; then
-    build_mode="debug"
-  elif [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    print_usage
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      debug|release)
+        build_mode="$1"
+        shift
+        ;;
+      --release)
+        build_mode="release"
+        shift
+        ;;
+      --clean)
+        force_clean="true"
+        shift
+        ;;
+      --clean-bridge)
+        do_clean_bridge="true"
+        shift
+        ;;
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      *)
+        print_usage
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "${do_clean_bridge}" == "true" ]]; then
+    clean_bridge_only
     exit 0
-  else
-    print_usage
-    exit 1
   fi
 
-  build "${build_mode}"
+  build "${build_mode}" "${force_clean}"
   log "Build completed successfully (${build_mode})"
 }
 

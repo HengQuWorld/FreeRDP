@@ -130,7 +130,8 @@ export class BookmarkService {
       profile.enableClipboard ? '1' : '0',
       profile.enableAudio ? '1' : '0',
       profile.enableDrive ? '1' : '0',
-      this.encode(profile.appDataDir)
+      this.encode(profile.appDataDir),
+      profile.enableGfx ? '1' : '0'
     ];
     return parts.join('|');
   }
@@ -138,16 +139,18 @@ export class BookmarkService {
   private deserializeProfile(payload: string): ConnectionProfile | null {
     const parts: string[] = payload.split('|');
     if (parts.length !== 11 && parts.length !== 12 && parts.length !== 14 &&
-        parts.length !== 15 && parts.length !== 17 && parts.length !== 18) {
+        parts.length !== 15 && parts.length !== 17 && parts.length !== 18 &&
+        parts.length !== 19) {
       return null;
     }
 
     const portNumber: number = Number(parts[3]);
     const hasClientHostname: boolean = parts.length === 14 || parts.length === 15 ||
-      parts.length === 17 || parts.length === 18;
+      parts.length === 17 || parts.length === 18 || parts.length === 19;
     const hasRememberPassword: boolean = parts.length === 12 || parts.length === 15 ||
-      parts.length === 18;
-    const isGatewayExtendedFormat: boolean = parts.length === 17 || parts.length === 18;
+      parts.length === 18 || parts.length === 19;
+    const isGatewayExtendedFormat: boolean = parts.length === 17 || parts.length === 18 ||
+      parts.length === 19;
     const isExtendedFormat: boolean = parts.length === 14 || parts.length === 15 ||
       isGatewayExtendedFormat;
     const clientHostnameIndex: number = hasClientHostname ? 4 : -1;
@@ -191,7 +194,8 @@ export class BookmarkService {
       appDataDir: isExtendedFormat ? this.decode(parts[appDataDirIndex]) : '',
       enableClipboard: parts[clipboardIndex] === '1',
       enableAudio: parts[audioIndex] === '1',
-      enableDrive: parts[driveIndex] === '1'
+      enableDrive: parts[driveIndex] === '1',
+      enableGfx: parts.length === 19 ? parts[18] === '1' : false
     };
   }
 }

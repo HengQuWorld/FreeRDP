@@ -12,6 +12,7 @@ import { common } from '@kit.AbilityKit';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { BUILD_VERSION } from '../utils/BuildInfo';
 import { i18n } from '../utils/I18n';
+import { showKeyboardForField } from '../utils/KeyboardHelper';
 import dataPreferences from '@ohos.data.preferences';
 import { util } from '@kit.ArkTS';
 
@@ -58,6 +59,7 @@ struct Index {
   @State showDeleteConfirm: boolean = false;
   private unsubSessionChanged: (() => void) | null = null;
   private unsubWindowClosed: (() => void) | null = null;
+  private unsubCnDiscovered: (() => void) | null = null;
   private refreshTimer: number = -1;
   private connectionListScroller: Scroller = new Scroller();
 
@@ -105,6 +107,10 @@ struct Index {
       this.activeSessions = sessionManager.getActiveSessions();
     });
 
+    this.unsubCnDiscovered = sessionManager.onCertCommonNameDiscovered((_sessionId: number, cn: string) => {
+      this.homeViewModel.tryApplyCertificateName(cn);
+    });
+
     this.unsubWindowClosed = sessionWindowManager.onWindowClosed((_sessionId: number) => {
       this.activeSessions = sessionManager.getActiveSessions();
     });
@@ -121,6 +127,10 @@ struct Index {
       this.unsubSessionChanged();
       this.unsubSessionChanged = null;
     }
+    if (this.unsubCnDiscovered !== null) {
+      this.unsubCnDiscovered();
+      this.unsubCnDiscovered = null;
+    }
     if (this.unsubWindowClosed !== null) {
       this.unsubWindowClosed();
       this.unsubWindowClosed = null;
@@ -129,6 +139,17 @@ struct Index {
       clearInterval(this.refreshTimer);
       this.refreshTimer = -1;
     }
+  }
+
+  onPageShow(): void {
+    const sessions: SessionRecord[] = sessionManager.getActiveSessions();
+    if (sessions.length > 0) {
+      const lastSession: SessionRecord = sessions[sessions.length - 1];
+      if (lastSession.state.certCommonName.length > 0) {
+        this.homeViewModel.tryApplyCertificateName(lastSession.state.certCommonName);
+      }
+    }
+    this.activeSessions = sessions;
   }
 
   private createFallbackAgreementText(title: string): string {
@@ -594,6 +615,11 @@ struct Index {
       Row() {
         TextInput({ text: this.keyword, placeholder: i18n.get(this.appLanguage, 'search_placeholder') })
           .onChange((v: string) => this.keyword = v)
+          .focusOnTouch(false)
+          .id('index_search')
+          .onClick(() => {
+            showKeyboardForField(this.getUIContext(), 'index_search');
+          })
           .height(this.isPhoneLayout() ? 42 : 44)
           .fontSize(this.isPhoneLayout() ? 14 : 15)
           .backgroundColor(this.colors.surfaceElevated)
@@ -721,16 +747,6 @@ struct Index {
                       .layoutWeight(1)
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    if (c.securityMode && c.securityMode !== 'auto') {
-                      Text(c.securityMode.toUpperCase())
-                        .fontSize(11)
-                        .fontWeight(FontWeight.Medium)
-                        .fontColor(this.colors.primary)
-                        .backgroundColor(this.colors.tagBackground)
-                        .borderRadius(6)
-                        .padding({ left: 7, right: 7, top: 2, bottom: 2 })
-                        .margin({ left: 7 })
-                    }
                   }
                   .width('100%')
                   .alignItems(VerticalAlign.Center)
@@ -895,7 +911,6 @@ struct Index {
             onGatewayUserChange: (value: string) => this.homeViewModel.updateGatewayUsername(value),
             onGatewayPasswordChange: (value: string) => this.homeViewModel.updateGatewayPassword(value),
             onGatewayDomainChange: (value: string) => this.homeViewModel.updateGatewayDomain(value),
-            onSecurityModeChange: (value: string) => this.homeViewModel.updateSecurityMode(value),
             onClipboardChange: (value: boolean) => this.homeViewModel.toggleClipboard(value),
             onNew: () => { this.homeViewModel.createNewProfile(); this.selectedConnId = ''; },
             onSave: () => { void this.homeViewModel.saveCurrentProfile(); },

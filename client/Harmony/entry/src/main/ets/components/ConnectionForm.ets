@@ -1,16 +1,27 @@
 import { ConnectionProfile } from '../model/ConnectionProfile';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
+import { showKeyboardForField } from '../utils/KeyboardHelper';
 
 @Component
 export struct ConnectionForm {
-  @Prop profile: ConnectionProfile;
+  @Prop @Watch('onProfileChanged') profile: ConnectionProfile;
   @Prop canConnect: boolean;
   @Prop rememberPassword: boolean;
   @StorageLink('__app_is_dark_mode__') @Watch('onThemeChanged') isDark: boolean = false;
   @StorageLink('__app_language__') appLanguage: string = 'system';
   @State colors: ThemeColors = LightColors;
   @State gatewayExpanded: boolean = false;
+  @State connectionName: string = '';
+  @State hostAddress: string = '';
+  @State portNumber: string = '3389';
+  @State userName: string = '';
+  @State domainName: string = '';
+  @State passwordValue: string = '';
+  @State gatewayAddress: string = '';
+  @State gatewayUserName: string = '';
+  @State gatewayPasswordValue: string = '';
+  @State gatewayDomainName: string = '';
   onNameChange: (value: string) => void = (_value: string): void => {};
   onHostChange: (value: string) => void = (_value: string): void => {};
   onPortChange: (value: string) => void = (_value: string): void => {};
@@ -22,7 +33,6 @@ export struct ConnectionForm {
   onGatewayUserChange: (value: string) => void = (_value: string): void => {};
   onGatewayPasswordChange: (value: string) => void = (_value: string): void => {};
   onGatewayDomainChange: (value: string) => void = (_value: string): void => {};
-  onSecurityModeChange: (value: string) => void = (_value: string): void => {};
   onClipboardChange: (value: boolean) => void = (_value: boolean): void => {};
   onNew: () => void = (): void => {};
   onSave: () => void = (): void => {};
@@ -32,8 +42,56 @@ export struct ConnectionForm {
     this.colors = this.isDark ? DarkColors : LightColors;
   }
 
+  onProfileChanged(): void {
+    if (this.connectionName !== this.profile.name) {
+      this.connectionName = this.profile.name;
+    }
+    if (this.hostAddress !== this.profile.host) {
+      this.hostAddress = this.profile.host;
+    }
+    const portStr = `${this.profile.port}`;
+    if (this.portNumber !== portStr) {
+      this.portNumber = portStr;
+    }
+    if (this.userName !== this.profile.username) {
+      this.userName = this.profile.username;
+    }
+    if (this.domainName !== this.profile.domain) {
+      this.domainName = this.profile.domain;
+    }
+    if (this.passwordValue !== this.profile.password) {
+      this.passwordValue = this.profile.password;
+    }
+    if (this.gatewayAddress !== this.profile.gateway) {
+      this.gatewayAddress = this.profile.gateway;
+    }
+    if (this.gatewayUserName !== this.profile.gatewayUsername) {
+      this.gatewayUserName = this.profile.gatewayUsername;
+    }
+    if (this.gatewayPasswordValue !== this.profile.gatewayPassword) {
+      this.gatewayPasswordValue = this.profile.gatewayPassword;
+    }
+    if (this.gatewayDomainName !== this.profile.gatewayDomain) {
+      this.gatewayDomainName = this.profile.gatewayDomain;
+    }
+  }
+
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
+    this.syncFromProfile();
+  }
+
+  private syncFromProfile(): void {
+    this.connectionName = this.profile.name;
+    this.hostAddress = this.profile.host;
+    this.portNumber = `${this.profile.port}`;
+    this.userName = this.profile.username;
+    this.domainName = this.profile.domain;
+    this.passwordValue = this.profile.password;
+    this.gatewayAddress = this.profile.gateway;
+    this.gatewayUserName = this.profile.gatewayUsername;
+    this.gatewayPasswordValue = this.profile.gatewayPassword;
+    this.gatewayDomainName = this.profile.gatewayDomain;
   }
 
   private hasGatewayConfig(): boolean {
@@ -63,7 +121,7 @@ export struct ConnectionForm {
       .width('100%')
 
       Column({ space: 14 }) {
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'connection_name_placeholder'), text: this.profile.name })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'connection_name_placeholder'), text: $$this.connectionName })
           .backgroundColor(this.colors.inputBackground)
           .borderRadius(12)
           .border({ width: 1, color: this.colors.inputBorder })
@@ -72,9 +130,17 @@ export struct ConnectionForm {
           .padding({ left: 16, right: 16 })
           .placeholderColor(this.colors.mutedForeground)
           .fontColor(this.colors.foreground)
-          .onChange((v) => this.onNameChange(v));
+          .focusOnTouch(false)
+          .id('connectionForm_name')
+          .onClick(() => {
+            showKeyboardForField(this.getUIContext(),'connectionForm_name');
+          })
+          .onChange((v) => {
+            this.connectionName = v;
+            this.onNameChange(v);
+          });
 
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'server_address_placeholder'), text: this.profile.host })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'server_address_placeholder'), text: $$this.hostAddress })
           .backgroundColor(this.colors.inputBackground)
           .borderRadius(12)
           .border({ width: 1, color: this.colors.inputBorder })
@@ -83,10 +149,18 @@ export struct ConnectionForm {
           .padding({ left: 16, right: 16 })
           .placeholderColor(this.colors.mutedForeground)
           .fontColor(this.colors.foreground)
-          .onChange((v) => this.onHostChange(v));
+          .focusOnTouch(false)
+          .id('connectionForm_host')
+          .onClick(() => {
+            showKeyboardForField(this.getUIContext(),'connectionForm_host');
+          })
+          .onChange((v) => {
+            this.hostAddress = v;
+            this.onHostChange(v);
+          });
 
         Row({ space: 12 }) {
-          TextInput({ placeholder: i18n.get(this.appLanguage, 'port_placeholder'), text: `${this.profile.port}` })
+          TextInput({ placeholder: i18n.get(this.appLanguage, 'port_placeholder'), text: $$this.portNumber })
             .type(InputType.Number)
             .backgroundColor(this.colors.inputBackground)
             .borderRadius(12)
@@ -97,10 +171,18 @@ export struct ConnectionForm {
             .placeholderColor(this.colors.mutedForeground)
             .fontColor(this.colors.foreground)
             .layoutWeight(1)
-            .onChange((v) => this.onPortChange(v));
+            .focusOnTouch(false)
+            .id('connectionForm_port')
+            .onClick(() => {
+              showKeyboardForField(this.getUIContext(),'connectionForm_port');
+            })
+            .onChange((v) => {
+              this.portNumber = v;
+              this.onPortChange(v);
+            });
         }
 
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'username_placeholder'), text: this.profile.username })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'username_placeholder'), text: $$this.userName })
           .backgroundColor(this.colors.inputBackground)
           .borderRadius(12)
           .border({ width: 1, color: this.colors.inputBorder })
@@ -109,9 +191,17 @@ export struct ConnectionForm {
           .padding({ left: 16, right: 16 })
           .placeholderColor(this.colors.mutedForeground)
           .fontColor(this.colors.foreground)
-          .onChange((v) => this.onUserChange(v));
+          .focusOnTouch(false)
+          .id('connectionForm_user')
+          .onClick(() => {
+            showKeyboardForField(this.getUIContext(),'connectionForm_user');
+          })
+          .onChange((v) => {
+            this.userName = v;
+            this.onUserChange(v);
+          });
 
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'domain_optional_placeholder'), text: this.profile.domain })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'domain_optional_placeholder'), text: $$this.domainName })
           .backgroundColor(this.colors.inputBackground)
           .borderRadius(12)
           .border({ width: 1, color: this.colors.inputBorder })
@@ -120,7 +210,15 @@ export struct ConnectionForm {
           .padding({ left: 16, right: 16 })
           .placeholderColor(this.colors.mutedForeground)
           .fontColor(this.colors.foreground)
-          .onChange((v) => this.onDomainChange(v));
+          .focusOnTouch(false)
+          .id('connectionForm_domain')
+          .onClick(() => {
+            showKeyboardForField(this.getUIContext(),'connectionForm_domain');
+          })
+          .onChange((v) => {
+            this.domainName = v;
+            this.onDomainChange(v);
+          });
 
         Row() {
           Text(i18n.get(this.appLanguage, 'remember_password'))
@@ -133,7 +231,7 @@ export struct ConnectionForm {
         .width('100%')
         .padding({ left: 4, right: 4, top: 8, bottom: 8 })
 
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'password_placeholder'), text: this.profile.password })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'password_placeholder'), text: $$this.passwordValue })
           .type(InputType.Password)
           .backgroundColor(this.rememberPassword ? this.colors.inputBackground : this.colors.muted)
           .borderRadius(12)
@@ -144,7 +242,15 @@ export struct ConnectionForm {
           .placeholderColor(this.colors.mutedForeground)
           .fontColor(this.rememberPassword ? this.colors.foreground : this.colors.mutedForeground)
           .enabled(this.rememberPassword)
-          .onChange((v) => this.onPasswordChange(v));
+          .focusOnTouch(false)
+          .id('connectionForm_password')
+          .onClick(() => {
+            showKeyboardForField(this.getUIContext(),'connectionForm_password');
+          })
+          .onChange((v) => {
+            this.passwordValue = v;
+            this.onPasswordChange(v);
+          });
 
         if (this.profile.username.length === 0 || this.profile.password.length === 0) {
           Row({ space: 10 }) {
@@ -182,9 +288,7 @@ export struct ConnectionForm {
               .fontColor(this.colors.foreground);
           }
           .onClick(() => { this.gatewayExpanded = !this.gatewayExpanded; })
-
           Blank()
-
           if (this.hasGatewayConfig()) {
             Text(i18n.get(this.appLanguage, 'gateway_configured'))
               .fontSize(13)
@@ -200,7 +304,7 @@ export struct ConnectionForm {
 
         if (this.gatewayExpanded) {
           Column({ space: 14 }) {
-            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_address_placeholder'), text: this.profile.gateway })
+            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_address_placeholder'), text: $$this.gatewayAddress })
               .backgroundColor(this.colors.inputBackground)
               .borderRadius(12)
               .border({ width: 1, color: this.colors.inputBorder })
@@ -209,8 +313,16 @@ export struct ConnectionForm {
               .padding({ left: 16, right: 16 })
               .placeholderColor(this.colors.mutedForeground)
               .fontColor(this.colors.foreground)
-              .onChange((v) => this.onGatewayChange(v));
-            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_username_placeholder'), text: this.profile.gatewayUsername })
+              .focusOnTouch(false)
+              .id('connectionForm_gw_addr')
+              .onClick(() => {
+                showKeyboardForField(this.getUIContext(),'connectionForm_gw_addr');
+              })
+              .onChange((v) => {
+                this.gatewayAddress = v;
+                this.onGatewayChange(v);
+              });
+            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_username_placeholder'), text: $$this.gatewayUserName })
               .backgroundColor(this.colors.inputBackground)
               .borderRadius(12)
               .border({ width: 1, color: this.colors.inputBorder })
@@ -219,8 +331,16 @@ export struct ConnectionForm {
               .padding({ left: 16, right: 16 })
               .placeholderColor(this.colors.mutedForeground)
               .fontColor(this.colors.foreground)
-              .onChange((v) => this.onGatewayUserChange(v));
-            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_domain_placeholder'), text: this.profile.gatewayDomain })
+              .focusOnTouch(false)
+              .id('connectionForm_gw_user')
+              .onClick(() => {
+                showKeyboardForField(this.getUIContext(),'connectionForm_gw_user');
+              })
+              .onChange((v) => {
+                this.gatewayUserName = v;
+                this.onGatewayUserChange(v);
+              });
+            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_domain_placeholder'), text: $$this.gatewayDomainName })
               .backgroundColor(this.colors.inputBackground)
               .borderRadius(12)
               .border({ width: 1, color: this.colors.inputBorder })
@@ -229,8 +349,16 @@ export struct ConnectionForm {
               .padding({ left: 16, right: 16 })
               .placeholderColor(this.colors.mutedForeground)
               .fontColor(this.colors.foreground)
-              .onChange((v) => this.onGatewayDomainChange(v));
-            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_password_placeholder'), text: this.profile.gatewayPassword })
+              .focusOnTouch(false)
+              .id('connectionForm_gw_domain')
+              .onClick(() => {
+                showKeyboardForField(this.getUIContext(),'connectionForm_gw_domain');
+              })
+              .onChange((v) => {
+                this.gatewayDomainName = v;
+                this.onGatewayDomainChange(v);
+              });
+            TextInput({ placeholder: i18n.get(this.appLanguage, 'gateway_password_placeholder'), text: $$this.gatewayPasswordValue })
               .type(InputType.Password)
               .backgroundColor(this.colors.inputBackground)
               .borderRadius(12)
@@ -240,7 +368,15 @@ export struct ConnectionForm {
               .padding({ left: 16, right: 16 })
               .placeholderColor(this.colors.mutedForeground)
               .fontColor(this.colors.foreground)
-              .onChange((v) => this.onGatewayPasswordChange(v));
+              .focusOnTouch(false)
+              .id('connectionForm_gw_pass')
+              .onClick(() => {
+                showKeyboardForField(this.getUIContext(),'connectionForm_gw_pass');
+              })
+              .onChange((v) => {
+                this.gatewayPasswordValue = v;
+                this.onGatewayPasswordChange(v);
+              });
           }
           .width('100%')
           .padding({ top: 4, bottom: 16 })
@@ -248,53 +384,6 @@ export struct ConnectionForm {
         }
       }
       .width('100%')
-      .backgroundColor(this.colors.surfaceElevated)
-      .border({ width: 1, color: this.colors.surfaceElevatedBorder })
-      .borderRadius(16)
-
-      Column({ space: 14 }) {
-        Text(i18n.get(this.appLanguage, 'security_mode'))
-          .fontSize(16)
-          .fontColor(this.colors.foreground)
-          .alignSelf(ItemAlign.Start)
-
-        Row({ space: 10 }) {
-          Button(i18n.get(this.appLanguage, 'security_auto'))
-            .type(ButtonType.Capsule)
-            .fontSize(15)
-            .height(40)
-            .padding({ left: 20, right: 20 })
-            .fontColor(this.profile.securityMode === 'auto' ? this.colors.primaryForeground : this.colors.mutedForeground)
-            .backgroundColor(this.profile.securityMode === 'auto' ? this.colors.primary : this.colors.muted)
-            .onClick(() => this.onSecurityModeChange('auto'))
-          Button('NLA')
-            .type(ButtonType.Capsule)
-            .fontSize(15)
-            .height(40)
-            .padding({ left: 20, right: 20 })
-            .fontColor(this.profile.securityMode === 'nla' ? this.colors.primaryForeground : this.colors.mutedForeground)
-            .backgroundColor(this.profile.securityMode === 'nla' ? this.colors.primary : this.colors.muted)
-            .onClick(() => this.onSecurityModeChange('nla'))
-          Button('TLS')
-            .type(ButtonType.Capsule)
-            .fontSize(15)
-            .height(40)
-            .padding({ left: 20, right: 20 })
-            .fontColor(this.profile.securityMode === 'tls' ? this.colors.primaryForeground : this.colors.mutedForeground)
-            .backgroundColor(this.profile.securityMode === 'tls' ? this.colors.primary : this.colors.muted)
-            .onClick(() => this.onSecurityModeChange('tls'))
-          Button('RDP')
-            .type(ButtonType.Capsule)
-            .fontSize(15)
-            .height(40)
-            .padding({ left: 20, right: 20 })
-            .fontColor(this.profile.securityMode === 'rdp' ? this.colors.primaryForeground : this.colors.mutedForeground)
-            .backgroundColor(this.profile.securityMode === 'rdp' ? this.colors.primary : this.colors.muted)
-            .onClick(() => this.onSecurityModeChange('rdp'))
-        }
-      }
-      .width('100%')
-      .padding(16)
       .backgroundColor(this.colors.surfaceElevated)
       .border({ width: 1, color: this.colors.surfaceElevatedBorder })
       .borderRadius(16)

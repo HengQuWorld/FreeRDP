@@ -100,6 +100,7 @@ class NativeSessionBackendImpl implements SessionBackend {
       enableAudio: profile.enableAudio,
       enableDrive: profile.enableDrive,
       ignoreCertificate: true,
+      enableGfx: profile.enableGfx,
       desktopWidth: DEFAULT_DESKTOP_WIDTH,
       desktopHeight: DEFAULT_DESKTOP_HEIGHT
     };
@@ -206,9 +207,11 @@ class NativeSessionBackendImpl implements SessionBackend {
   private buildState(sessionId: number, nativeInfo: NativeSessionInfo,
                      profile: ConnectionProfile): SessionState {
     const stage: SessionStage = this.mapStage(nativeInfo.stage, nativeInfo.connected);
+    const certCN: string = (nativeInfo.certCommonName && nativeInfo.certCommonName.length > 0)
+      ? nativeInfo.certCommonName : '';
     const title: string = profile.name.length > 0
       ? profile.name
-      : (profile.host.length > 0 ? profile.host : `Session ${sessionId}`);
+      : (certCN.length > 0 ? certCN : (profile.host.length > 0 ? profile.host : `Session ${sessionId}`));
     const baseMessage: string = nativeInfo.message.length > 0
       ? this.translateNativeMessage(nativeInfo.message)
       : this.defaultMessage(stage);
@@ -219,7 +222,8 @@ class NativeSessionBackendImpl implements SessionBackend {
       stage: stage,
       title: title,
       message: message,
-      profile: cloneProfile(profile)
+      profile: cloneProfile(profile),
+      certCommonName: certCN
     };
   }
 
@@ -269,7 +273,8 @@ class NativeSessionBackendImpl implements SessionBackend {
         stage: NATIVE_STAGE_DISCONNECTED,
         lastError: 1,
         connected: false,
-        message: i18n.get(i18n.currentLocale(), 'error.session_not_found')
+        message: i18n.get(i18n.currentLocale(), 'error.session_not_found'),
+        certCommonName: ''
       };
       return this.buildState(sessionId, missingInfo, createEmptyProfile('missing'));
     }

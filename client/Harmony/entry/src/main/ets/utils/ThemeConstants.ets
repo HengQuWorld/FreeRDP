@@ -27,6 +27,8 @@ export interface ThemeColors {
   chromeOverlayText: string;
   chromeOverlayBorder: string;
   chromeOverlayShadow: string;
+  chromeButtonBg: string;
+  chromeButtonBgHover: string;
   dotActive: string;
   dotInactive: string;
   shadowSm: string;
@@ -65,10 +67,12 @@ export const LightColors: ThemeColors = {
   disconnectedGray: '#78716c',
   hintOrange: '#b0882c',
   hintOrangeBg: '#fef8ec',
-  chromeOverlay: 'rgba(250,250,248,0.88)',
+  chromeOverlay: 'rgba(253,251,247,0.96)',
   chromeOverlayText: '#1c1917',
-  chromeOverlayBorder: 'rgba(44,95,99,0.12)',
-  chromeOverlayShadow: 'rgba(28,25,23,0.08)',
+  chromeOverlayBorder: 'rgba(44,79,84,0.16)',
+  chromeOverlayShadow: 'rgba(12,20,22,0.10)',
+  chromeButtonBg: 'rgba(12,20,22,0.06)',
+  chromeButtonBgHover: 'rgba(12,20,22,0.10)',
   dotActive: 'rgba(28,25,23,0.9)',
   dotInactive: 'rgba(28,25,23,0.35)',
   shadowSm: 'rgba(28,25,23,0.04)',
@@ -107,10 +111,12 @@ export const DarkColors: ThemeColors = {
   disconnectedGray: '#8899a0',
   hintOrange: '#fbbf24',
   hintOrangeBg: 'rgba(251,191,36,0.10)',
-  chromeOverlay: 'rgba(10,18,20,0.85)',
+  chromeOverlay: 'rgba(12,20,22,0.94)',
   chromeOverlayText: '#eceae6',
-  chromeOverlayBorder: 'rgba(95,184,184,0.16)',
-  chromeOverlayShadow: 'rgba(0,0,0,0.30)',
+  chromeOverlayBorder: 'rgba(95,184,184,0.18)',
+  chromeOverlayShadow: 'rgba(0,0,0,0.40)',
+  chromeButtonBg: 'rgba(255,255,255,0.08)',
+  chromeButtonBgHover: 'rgba(255,255,255,0.13)',
   dotActive: 'rgba(236,234,230,0.90)',
   dotInactive: 'rgba(236,234,230,0.35)',
   shadowSm: 'rgba(0,0,0,0.15)',

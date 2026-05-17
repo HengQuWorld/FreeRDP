@@ -30,7 +30,24 @@ export struct SessionWindow {
   @State private isFullscreen: boolean = false;
   @State private keyboardRequestToken: number = 0;
   @State private chromeVisible: boolean = true;
+  @State private zoomScale: number = 1.0;
+  @State private zoomInToken: number = 0;
+  @State private zoomOutToken: number = 0;
+  @State private zoomResetToken: number = 0;
+  @State private showNavigationPad: boolean = false;
+  @State private panUpToken: number = 0;
+  @State private panDownToken: number = 0;
+  @State private panLeftToken: number = 0;
+  @State private panRightToken: number = 0;
+  @State private surfaceWidth: number = 0;
+  @State private surfaceHeight: number = 0;
+  @State private navPadX: number = 0;
+  @State private navPadY: number = 0;
   private chromeHideTimer: number = -1;
+  private navPadDragging: boolean = false;
+  private navPadDragStartX: number = 0;
+  private navPadDragStartY: number = 0;
+  private navPadInited: boolean = false;
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
@@ -43,7 +60,7 @@ export struct SessionWindow {
     this.chromeHideTimer = setTimeout(() => {
       this.chromeVisible = false;
       this.chromeHideTimer = -1;
-    }, 3200);
+    }, 8000);
   }
 
   private revealChrome(): void {
@@ -57,6 +74,13 @@ export struct SessionWindow {
     }
   }
 
+  private ensureNavPadPosition(): void {
+    if (this.navPadInited) return;
+    this.navPadX = Math.max(0, this.surfaceWidth - 176);
+    this.navPadY = Math.max(0, this.surfaceHeight - 280);
+    this.navPadInited = true;
+  }
+
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
     this.scheduleChromeAutoHide();
@@ -67,6 +91,18 @@ export struct SessionWindow {
       clearTimeout(this.chromeHideTimer);
       this.chromeHideTimer = -1;
     }
+  }
+
+  private getConnectionStateColor(): string {
+    if (this.stage === SessionStage.Connected) return 'rgba(34,160,107,0.85)';
+    if (this.stage === SessionStage.Connecting) return 'rgba(176,136,44,0.85)';
+    return 'rgba(120,113,108,0.85)';
+  }
+
+  private getConnectionStateText(): string {
+    if (this.stage === SessionStage.Connected) return '已连接';
+    if (this.stage === SessionStage.Connecting) return '连接中';
+    return '已断开';
   }
 
   build() {
@@ -93,99 +129,236 @@ export struct SessionWindow {
         onUnicodeKey: (code, down) => {
           this.extendChromeInteractionIfVisible();
           this.onUnicodeKey(code, down);
-        }
+        },
+        onScaleChange: (scale: number) => {
+          this.zoomScale = scale;
+        },
+        onSurfaceSizeChange: (width: number, height: number) => {
+          this.surfaceWidth = width;
+          this.surfaceHeight = height;
+        },
+        zoomInToken: this.zoomInToken,
+        zoomOutToken: this.zoomOutToken,
+        zoomResetToken: this.zoomResetToken,
+        panUpToken: this.panUpToken,
+        panDownToken: this.panDownToken,
+        panLeftToken: this.panLeftToken,
+        panRightToken: this.panRightToken
       })
 
       if (this.chromeVisible) {
         Column() {
           Row() {
-            Column({ space: 4 }) {
+            Column({ space: 2 }) {
               Text(this.title)
-                .fontSize(this.isFullscreen ? 18 : 20)
+                .fontSize(16)
                 .fontWeight(FontWeight.Medium)
-                .fontColor(this.colors.chromeOverlayText)
+                .fontColor('#ffffff')
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
 
               Text(this.subtitle)
                 .fontSize(12)
-                .fontColor(this.colors.mutedForeground)
+                .fontColor('rgba(231,229,228,0.82)')
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
             }
             .alignItems(HorizontalAlign.Start)
             .layoutWeight(1)
 
-            Text(this.stage)
-              .fontSize(12)
-              .fontColor(this.colors.tagText)
-              .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-              .backgroundColor(this.colors.tagBackground)
-              .borderRadius(999)
+            Row({ space: 8 }) {
+              Text(this.getConnectionStateText())
+                .fontSize(11)
+                .fontColor('#ffffff')
+                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                .backgroundColor(this.getConnectionStateColor())
+                .borderRadius(14)
+
+              if (this.stage === SessionStage.Connected) {
+                Button(this.isFullscreen ? '退出全屏' : '全屏')
+                  .height(32)
+                  .fontSize(12)
+                  .fontColor('#e7e5e4')
+                  .backgroundColor('rgba(255,255,255,0.08)')
+                  .border({ width: 1, color: 'rgba(255,255,255,0.12)' })
+                  .borderRadius(16)
+                  .onClick(() => {
+                    this.isFullscreen = !this.isFullscreen;
+                    this.extendChromeInteractionIfVisible();
+                  })
+              }
+            }
+            .margin({ left: 12 })
+            .justifyContent(FlexAlign.End)
+            .alignItems(VerticalAlign.Center)
           }
           .width('100%')
-          .alignItems(VerticalAlign.Center)
-          .padding({ left: 14, right: 14, top: 12, bottom: 12 })
-          .backgroundColor(this.colors.chromeOverlay)
-          .border({ width: 1, color: this.colors.chromeOverlayBorder })
-          .borderRadius(22)
-          .shadow({ radius: 20, color: this.colors.chromeOverlayShadow, offsetX: 0, offsetY: 6 })
+          .padding({ left: 14, right: 14, top: this.isFullscreen ? 12 : 14, bottom: 12 })
+          .backgroundColor('rgba(12,20,22,0.76)')
+          .border({ width: 1, color: 'rgba(255,255,255,0.08)' })
+          .borderRadius(this.isFullscreen ? 20 : 18)
+          .margin({ left: 12, right: 12, top: 12 })
+          .shadow({ radius: 18, color: 'rgba(0,0,0,0.16)', offsetX: 0, offsetY: 6 })
           .onTouch((ev: TouchEvent) => {
             if (ev.type === TouchType.Down) this.extendChromeInteractionIfVisible();
           })
+          .onMouse(() => {})
+          .onHover(() => {})
 
           Blank()
             .layoutWeight(1)
-            .onClick(() => this.scheduleChromeAutoHide())
 
-          SessionToolbar({
-            stage: this.stage,
-            isFullscreen: this.isFullscreen,
-            onSendCtrlAltDel: this.onSendCtrlAltDel,
-            onSendWindowsKey: this.onSendWindowsKey,
-            onSendEscape: this.onSendEscape,
-            onShowKeyboard: (): void => {
-              this.keyboardRequestToken += 1;
-            },
-            onToggleFullscreen: (): void => {
-              this.isFullscreen = !this.isFullscreen;
-            },
-            onDisconnect: this.onDisconnect
-          })
-          .onTouch((ev: TouchEvent) => {
-            if (ev.type === TouchType.Down) this.extendChromeInteractionIfVisible();
-          })
+          if (this.stage === SessionStage.Connected) {
+            SessionToolbar({
+              stage: this.stage,
+              isFullscreen: this.isFullscreen,
+              zoomScale: this.zoomScale,
+              showNavigationPad: this.showNavigationPad,
+              onZoomIn: (): void => {
+                this.zoomInToken += 1;
+                this.extendChromeInteractionIfVisible();
+              },
+              onZoomOut: (): void => {
+                this.zoomOutToken += 1;
+                this.extendChromeInteractionIfVisible();
+              },
+              onResetZoom: (): void => {
+                this.zoomResetToken += 1;
+                this.extendChromeInteractionIfVisible();
+              },
+              onToggleNavigationPad: (): void => {
+                this.showNavigationPad = !this.showNavigationPad;
+                if (this.showNavigationPad) {
+                  this.ensureNavPadPosition();
+                }
+                this.extendChromeInteractionIfVisible();
+              },
+              onSendCtrlAltDel: this.onSendCtrlAltDel,
+              onSendWindowsKey: this.onSendWindowsKey,
+              onSendEscape: this.onSendEscape,
+              onShowKeyboard: (): void => {
+                this.keyboardRequestToken += 1;
+              },
+              onToggleFullscreen: (): void => {
+                this.isFullscreen = !this.isFullscreen;
+              },
+              onDisconnect: this.onDisconnect
+            })
+            .onMouse(() => {})
+            .onHover(() => {})
+          }
         }
         .width('100%')
         .height('100%')
-        .padding(this.isFullscreen ? 12 : 16)
-        .hitTestBehavior(HitTestMode.Transparent)
       } else {
-        Row() {
-          Column({ space: 5 }) {
-            Blank().width(4).height(4).borderRadius(2).backgroundColor(this.colors.dotActive)
-            Blank().width(4).height(4).borderRadius(2).backgroundColor(this.colors.dotInactive)
-            Blank().width(4).height(4).borderRadius(2).backgroundColor(this.colors.dotInactive)
-          }
+        Column({ space: 5 }) {
+          Blank().width(4).height(4).borderRadius(2).backgroundColor('rgba(231,229,228,0.90)')
+          Blank().width(4).height(4).borderRadius(2).backgroundColor('rgba(231,229,228,0.35)')
+          Blank().width(4).height(4).borderRadius(2).backgroundColor('rgba(231,229,228,0.35)')
         }
-        .width(18)
-        .height(72)
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.colors.chromeOverlay)
-        .border({ width: 1, color: this.colors.chromeOverlayBorder })
-        .borderRadius({ topLeft: 12, bottomLeft: 12, topRight: 0, bottomRight: 0 })
-        .position({ x: '100%', y: '50%' })
-        .translate({ x: '-100%', y: '-50%' })
         .onClick(() => this.revealChrome())
         .onTouch((ev: TouchEvent) => {
           if (ev.type === TouchType.Down) this.revealChrome();
         })
+        .padding({ top: 8, bottom: 8, left: 4, right: 4 })
+        .backgroundColor('rgba(12,20,22,0.76)')
+        .border({ width: 1, color: 'rgba(255,255,255,0.08)' })
+        .borderRadius({ topLeft: 12, bottomLeft: 12, topRight: 0, bottomRight: 0 })
+        .position({ x: '100%', y: '50%' })
+        .translate({ x: '-100%', y: '-50%' })
+        .hitTestBehavior(HitTestMode.Default)
+      }
+
+      if (this.showNavigationPad && this.stage === SessionStage.Connected) {
+        this.buildNavigationPad()
       }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(this.colors.background)
     .padding(this.isFullscreen ? 0 : 12)
+    .clip(true)
     .animation({ duration: 300, curve: Curve.EaseIn })
+  }
+
+  @Builder
+  private buildNavigationPad(): void {
+    Column({ space: 4 }) {
+      Row({ space: 8 }) {
+        this.buildNavButton('−', () => {
+          this.zoomOutToken += 1;
+          this.extendChromeInteractionIfVisible();
+        })
+        this.buildNavButton('+', () => {
+          this.zoomInToken += 1;
+          this.extendChromeInteractionIfVisible();
+        })
+      }
+      Blank().height(8)
+      this.buildNavButton('▲', () => {
+        this.panUpToken += 1;
+        this.extendChromeInteractionIfVisible();
+      })
+      Row({ space: 52 }) {
+        this.buildNavButton('◀', () => {
+          this.panLeftToken += 1;
+          this.extendChromeInteractionIfVisible();
+        })
+        this.buildNavButton('▶', () => {
+          this.panRightToken += 1;
+          this.extendChromeInteractionIfVisible();
+        })
+      }
+      this.buildNavButton('▼', () => {
+        this.panDownToken += 1;
+        this.extendChromeInteractionIfVisible();
+      })
+    }
+    .alignItems(HorizontalAlign.Center)
+    .padding(12)
+    .backgroundColor('rgba(12,20,22,0.5)')
+    .borderRadius(20)
+    .position({ x: this.navPadX, y: this.navPadY })
+    .zIndex(9999)
+    .hitTestBehavior(HitTestMode.Default)
+    .onMouse(() => {})
+    .onHover(() => {})
+    .onTouch((ev: TouchEvent) => {
+      if (ev.type === TouchType.Down) {
+        this.navPadDragging = false;
+        this.navPadDragStartX = ev.touches[0].x;
+        this.navPadDragStartY = ev.touches[0].y;
+      } else if (ev.type === TouchType.Move) {
+        const dx = ev.touches[0].x - this.navPadDragStartX;
+        const dy = ev.touches[0].y - this.navPadDragStartY;
+        if (Math.abs(dx) + Math.abs(dy) > 8) {
+          this.navPadDragging = true;
+        }
+        if (this.navPadDragging) {
+          this.navPadX += dx;
+          this.navPadY += dy;
+          this.navPadDragStartX = ev.touches[0].x;
+          this.navPadDragStartY = ev.touches[0].y;
+        }
+      } else if (ev.type === TouchType.Up || ev.type === TouchType.Cancel) {
+        this.navPadDragging = false;
+      }
+    })
+  }
+
+  @Builder
+  private buildNavButton(label: string, onTap: () => void): void {
+    Button() {
+      Text(label)
+        .fontSize(20)
+        .fontColor(Color.White)
+    }
+    .width(44)
+    .height(44)
+    .backgroundColor('rgba(255,255,255,0.15)')
+    .borderRadius(12)
+    .type(ButtonType.Normal)
+    .enabled(this.stage === SessionStage.Connected)
+    .onClick(onTap)
   }
 }

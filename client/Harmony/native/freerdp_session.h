@@ -49,6 +49,7 @@ class FreeRDPHarmonySession {
   bool SendUnicodeKey(std::uint16_t codepoint, bool down);
   void SubmitAuth(const std::string& username, const std::string& password, const std::string& domain);
   void SubmitCert(bool accept);
+  void SetCertificateCommonName(const std::string& cn);
   void SetSurfaceId(const std::string& surfaceIdStr);
   void UpdateFrame(std::uint32_t width, std::uint32_t height, std::uint32_t left,
                    std::uint32_t top, std::uint32_t dirtyWidth, std::uint32_t dirtyHeight,

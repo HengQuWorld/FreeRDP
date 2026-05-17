@@ -23,8 +23,6 @@
     "gateway_username_placeholder": "网关用户名",
     "gateway_domain_placeholder": "网关域",
     "gateway_password_placeholder": "网关密码",
-    "security_mode": "安全模式",
-    "security_auto": "自动",
     "clipboard_bidirectional": "双向剪贴板",
     "save_config": "保存配置",
     "connect_desktop": "连接桌面",

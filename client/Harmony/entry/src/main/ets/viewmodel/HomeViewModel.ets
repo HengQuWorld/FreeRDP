@@ -45,6 +45,24 @@ export class HomeViewModel {
     this.persistDraft();
   }
 
+  tryApplyCertificateName(certCommonName: string): void {
+    if (certCommonName.length === 0) {
+      return;
+    }
+
+    const isAutoName: boolean = this.profile.name.length === 0 ||
+      this.profile.name === this.profile.host;
+    if (!isAutoName) {
+      return;
+    }
+
+    this.updateName(certCommonName);
+
+    if (this.isEditingBookmark) {
+      void this.saveCurrentProfile();
+    }
+  }
+
   updateHost(value: string): void {
     const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
     nextProfile.host = value;
@@ -115,13 +133,6 @@ export class HomeViewModel {
   updateGatewayDomain(value: string): void {
     const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
     nextProfile.gatewayDomain = value;
-    this.profile = nextProfile;
-    this.persistDraft();
-  }
-
-  updateSecurityMode(value: string): void {
-    const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
-    nextProfile.securityMode = value;
     this.profile = nextProfile;
     this.persistDraft();
   }

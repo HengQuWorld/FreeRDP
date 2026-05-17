@@ -28,7 +28,8 @@ export class SessionViewModel {
       stage: SessionStage.Idle,
       title: profile.name.length > 0 ? profile.name : profile.host,
       message: i18n.get(i18n.currentLocale(), 'not_connected'),
-      profile: profile
+      profile: profile,
+      certCommonName: ''
     };
   }
 
@@ -38,7 +39,8 @@ export class SessionViewModel {
       stage: current.stage,
       title: current.title,
       message: current.message,
-      profile: cloneProfile(current.profile)
+      profile: cloneProfile(current.profile),
+      certCommonName: current.certCommonName
     };
   }
 

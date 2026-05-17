@@ -88,6 +88,7 @@ HarmonySessionConfig GetDefaultConfig() {
   config.enableAudio = false;
   config.enableDrive = false;
   config.ignoreCertificate = true;
+  config.enableGfx = false;
   config.desktopWidth = kDefaultDesktopWidth;
   config.desktopHeight = kDefaultDesktopHeight;
   config.securityMode = "auto";
@@ -274,6 +275,7 @@ napi_value BuildInfoObject(napi_env env, int sessionId) {
   SetNamedUint32(env, result, "lastError", info.lastError);
   SetNamedBool(env, result, "connected", info.connected != 0);
   SetNamedString(env, result, "message", message.data());
+  SetNamedString(env, result, "certCommonName", info.certCommonName);
   return result;
 }
 
@@ -358,6 +360,7 @@ napi_value CreateSessionNapi(napi_env env, napi_callback_info info) {
   GetNamedBool(env, argv[0], "enableAudio", &config.enableAudio);
   GetNamedBool(env, argv[0], "enableDrive", &config.enableDrive);
   GetNamedBool(env, argv[0], "ignoreCertificate", &config.ignoreCertificate);
+  GetNamedBool(env, argv[0], "enableGfx", &config.enableGfx);
   GetNamedUint32(env, argv[0], "desktopWidth", &config.desktopWidth);
   GetNamedUint32(env, argv[0], "desktopHeight", &config.desktopHeight);
 
@@ -379,6 +382,7 @@ napi_value CreateSessionNapi(napi_env env, napi_callback_info info) {
     static_cast<std::uint8_t>(config.enableAudio ? 1U : 0U),
     static_cast<std::uint8_t>(config.enableDrive ? 1U : 0U),
     static_cast<std::uint8_t>(config.ignoreCertificate ? 1U : 0U),
+    static_cast<std::uint8_t>(config.enableGfx ? 1U : 0U),
     config.desktopWidth,
     config.desktopHeight
   };
@@ -791,6 +795,7 @@ int harmony_session_create(const HarmonySessionConfigC* config) {
   cppConfig.enableAudio = config->enableAudio != 0;
   cppConfig.enableDrive = config->enableDrive != 0;
   cppConfig.ignoreCertificate = config->ignoreCertificate != 0;
+  cppConfig.enableGfx = config->enableGfx != 0;
   cppConfig.desktopWidth = config->desktopWidth;
   cppConfig.desktopHeight = config->desktopHeight;
   return Adapter().CreateSession(cppConfig);
@@ -829,6 +834,10 @@ int harmony_session_get_info(int sessionId, HarmonySessionInfoC* info, char* mes
   info->stage = static_cast<uint32_t>(value.stage);
   info->lastError = value.lastError;
   info->connected = value.connected ? 1 : 0;
+
+  const size_t cnLen = std::min(sizeof(info->certCommonName) - 1, value.certCommonName.size());
+  std::memcpy(info->certCommonName, value.certCommonName.data(), cnLen);
+  info->certCommonName[cnLen] = '\0';
 
   if ((messageBuffer != nullptr) && (messageBufferSize > 0)) {
     const size_t toCopy = std::min(messageBufferSize - 1, value.message.size());

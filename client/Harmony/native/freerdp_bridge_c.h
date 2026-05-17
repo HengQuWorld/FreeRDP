@@ -26,6 +26,7 @@ typedef struct HarmonySessionConfigC {
   uint8_t enableAudio;
   uint8_t enableDrive;
   uint8_t ignoreCertificate;
+  uint8_t enableGfx;
   uint32_t desktopWidth;
   uint32_t desktopHeight;
 } HarmonySessionConfigC;
@@ -43,6 +44,7 @@ typedef struct HarmonySessionInfoC {
   uint32_t stage;
   uint32_t lastError;
   uint8_t connected;
+  char certCommonName[256];
 } HarmonySessionInfoC;
 
 int harmony_session_create(const HarmonySessionConfigC* config);

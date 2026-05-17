@@ -28,6 +28,7 @@ struct HarmonySessionConfig {
   bool enableAudio;
   bool enableDrive;
   bool ignoreCertificate;
+  bool enableGfx;
   std::uint32_t desktopWidth;
   std::uint32_t desktopHeight;
 };
@@ -56,6 +57,7 @@ struct HarmonySessionInfo {
   std::uint32_t lastError;
   bool connected;
   std::string message;
+  std::string certCommonName;
 };
 
 enum class HarmonySessionEventType : std::uint32_t {

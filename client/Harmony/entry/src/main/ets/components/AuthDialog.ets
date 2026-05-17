@@ -1,6 +1,7 @@
 import { SessionEvent } from '../model/SessionModels';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
+import { showKeyboardForField } from '../utils/KeyboardHelper';
 
 @CustomDialog
 export struct AuthDialog {
@@ -43,6 +44,11 @@ export struct AuthDialog {
         .padding({ left: 14, right: 14, top: 10, bottom: 10 })
         .placeholderColor(this.colors.mutedForeground)
         .fontColor(this.colors.foreground)
+        .focusOnTouch(false)
+        .id('authDialog_user')
+        .onClick(() => {
+          showKeyboardForField(this.getUIContext(),'authDialog_user');
+        })
         .onChange((value: string) => {
           this.username = value;
         })
@@ -57,6 +63,11 @@ export struct AuthDialog {
         .padding({ left: 14, right: 14, top: 10, bottom: 10 })
         .placeholderColor(this.colors.mutedForeground)
         .fontColor(this.colors.foreground)
+        .focusOnTouch(false)
+        .id('authDialog_pass')
+        .onClick(() => {
+          showKeyboardForField(this.getUIContext(),'authDialog_pass');
+        })
         .onChange((value: string) => {
           this.password = value;
         })
@@ -70,6 +81,11 @@ export struct AuthDialog {
         .padding({ left: 14, right: 14, top: 10, bottom: 10 })
         .placeholderColor(this.colors.mutedForeground)
         .fontColor(this.colors.foreground)
+        .focusOnTouch(false)
+        .id('authDialog_domain')
+        .onClick(() => {
+          showKeyboardForField(this.getUIContext(),'authDialog_domain');
+        })
         .onChange((value: string) => {
           this.domain = value;
         })
