@@ -88,6 +88,16 @@ class FreeRDPHarmonySession {
   bool QueueInputEvent(const InputEvent& event);
   bool ProcessInputEvents(void* input);
   void ThreadMain();
+  void ThreadMainWithRetry();
+  
+  // 智能连接相关方法
+  void ResetConnectionAttempt();
+  bool PrepareNextConnectionAttempt();
+  std::vector<std::string> GetSecurityProtocolsForAttempt() const;
+  std::string GetCurrentAttemptDescription() const;
+  
+  // 自适应参数调整
+  void AdjustParametersForAttempt();
 
   HarmonySessionConfig config_;
   mutable std::mutex mutex_;
@@ -118,6 +128,33 @@ class FreeRDPHarmonySession {
   std::string dialogUsername_;
   std::string dialogPassword_;
   std::string dialogDomain_;
+  
+  // 智能连接相关成员
+  int currentConnectionAttempt_;
+  int maxConnectionAttempts_;
+  std::vector<std::string> securityProtocolOrder_;
+  bool enableAdaptiveParameters_;
+  bool useHighPerformanceMode_;
+  std::string lastErrorType_;
+  std::string lastSuccessfulProtocol_;
+  
+  // 连接历史记录（静态，跨会话共享）
+  struct ConnectionHistory {
+    std::string host;
+    int port;
+    std::string protocol;
+    std::chrono::system_clock::time_point lastUsed;
+    bool operator==(const ConnectionHistory& other) const {
+      return host == other.host && port == other.port;
+    }
+  };
+  
+  static std::vector<ConnectionHistory> connectionHistory_;
+  static std::mutex historyMutex_;
+  
+  // 查找和保存历史记录
+  static std::string FindBestProtocolForHost(const std::string& host, int port);
+  static void SaveSuccessfulProtocol(const std::string& host, int port, const std::string& protocol);
 };
 
 using FreeRDPHarmonySessionPtr = std::shared_ptr<FreeRDPHarmonySession>;

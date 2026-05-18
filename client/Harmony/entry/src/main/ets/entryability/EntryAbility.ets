@@ -3,6 +3,7 @@ import { window } from '@kit.ArkUI';
 import { sessionWindowManager } from '../service/SessionWindowManager';
 import { ThemeMode, getStoredThemeMode } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
+import { logger, LogTags } from '../utils/Logger';
 
 interface WindowLike {
   setWindowTitle?: (t: string) => void;
@@ -17,6 +18,8 @@ export default class EntryAbility extends UIAbility {
   private mainWindow: Object | null = null;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    logger.info(LogTags.ENTRY_ABILITY, 'EntryAbility onCreate');
+    
     PersistentStorage.persistProp('__app_theme_mode__', 'light');
     const storedTheme: ThemeMode = getStoredThemeMode();
     AppStorage.setOrCreate('__app_is_dark_mode__', storedTheme === ThemeMode.Dark);
@@ -36,15 +39,24 @@ export default class EntryAbility extends UIAbility {
       this.applyWindowTitle();
     });
 
-    sessionWindowManager.initialize(this.context);
+    try {
+      sessionWindowManager.initialize(this.context);
+      logger.info(LogTags.ENTRY_ABILITY, 'SessionWindowManager initialized');
+    } catch (e) {
+      logger.error(LogTags.ENTRY_ABILITY, 'Failed to initialize SessionWindowManager', e);
+    }
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
+    logger.info(LogTags.ENTRY_ABILITY, 'onWindowStageCreate');
+    
     windowStage.loadContent('pages/Index', (error: Error | undefined) => {
       const serializedError: string | undefined = JSON.stringify(error);
       if (error !== undefined && serializedError !== undefined &&
           serializedError.indexOf('"code":0') < 0) {
-        console.error(`loadContent failed: ${serializedError}`);
+        logger.error(LogTags.ENTRY_ABILITY, `loadContent failed: ${serializedError}`);
+      } else {
+        logger.info(LogTags.ENTRY_ABILITY, 'loadContent succeeded');
       }
     });
 
@@ -54,8 +66,10 @@ export default class EntryAbility extends UIAbility {
       if (mainWin) {
         this.mainWindow = mainWin;
         this.applyWindowTitle();
+        logger.info(LogTags.ENTRY_ABILITY, 'Main window obtained');
       }
-    } catch (_e) {
+    } catch (e) {
+      logger.error(LogTags.ENTRY_ABILITY, 'Failed to get main window', e);
     }
   }
 
@@ -64,7 +78,9 @@ export default class EntryAbility extends UIAbility {
       const title = AppStorage.get<string>('appName') ?? '碧虎远程桌面';
       const w = this.mainWindow as WindowLike;
       w?.setWindowTitle?.(title);
-    } catch (_e) {
+      logger.debug(LogTags.ENTRY_ABILITY, `Window title set to: ${title}`);
+    } catch (e) {
+      logger.error(LogTags.ENTRY_ABILITY, 'Failed to apply window title', e);
     }
   }
 

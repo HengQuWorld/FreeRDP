@@ -1,6 +1,8 @@
 import { ConnectionProfile, cloneProfile } from '../model/ConnectionProfile';
 import { SessionEvent, SessionEventType, SessionSnapshot, SessionStage, SessionState } from '../model/SessionModels';
 import { sessionBridge } from './SessionNativeBridge';
+import { logger, LogTags } from '../utils/Logger';
+import { i18n } from '../utils/I18n';
 
 export interface SessionRecord {
   sessionId: number;
@@ -74,10 +76,15 @@ class SessionManagerImpl {
   }
 
   async createAndConnect(profile: ConnectionProfile): Promise<number> {
+    logger.info(LogTags.SESSION_MANAGER, `Creating session for ${profile.host}:${profile.port}`);
+    
     const sessionId: number = sessionBridge.createSession(profile);
     if (sessionId <= 0) {
+      logger.error(LogTags.SESSION_MANAGER, 'Failed to create session: sessionId <= 0');
       return 0;
     }
+
+    logger.info(LogTags.SESSION_MANAGER, `Session created with ID: ${sessionId}`);
 
     const record: SessionRecord = {
       sessionId: sessionId,
@@ -94,7 +101,7 @@ class SessionManagerImpl {
       sessionId: record.state.sessionId,
       stage: SessionStage.Connecting,
       title: record.state.title,
-      message: '正在连接远程桌面...',
+      message: i18n.get(i18n.currentLocale(), 'session.connecting'),
       profile: record.state.profile,
       certCommonName: ''
     };
@@ -102,23 +109,34 @@ class SessionManagerImpl {
     this.notifyChanged();
 
     try {
+      logger.info(LogTags.SESSION_MANAGER, `Connecting session ${sessionId}...`);
       const connectedState: SessionState = await sessionBridge.connect(sessionId);
       record.state = connectedState;
       record.snapshot = sessionBridge.getSnapshot(sessionId);
       this.lastObservedFrameSequences.set(sessionId, record.snapshot.frameSequence);
+      
       if (connectedState.certCommonName.length > 0 && !this.cnNotifiedSessionIds.has(sessionId)) {
         this.cnNotifiedSessionIds.add(sessionId);
         this.notifyCnDiscovered(sessionId, connectedState.certCommonName);
       }
+      
+      logger.info(LogTags.SESSION_MANAGER, `Session ${sessionId} connected successfully`);
     } catch (e) {
+      const errorMsg: string = logger.logException(LogTags.SESSION_MANAGER, 'Connection', e);
+      const friendlyMsg: string = i18n.get(i18n.currentLocale(), 'session.connect_failed');
+      
       record.state = {
         sessionId: sessionId,
         stage: SessionStage.Error,
         title: profile.name.length > 0 ? profile.name : profile.host,
-        message: '连接失败: ' + (e as Error).message,
+        message: `${friendlyMsg}: ${errorMsg}`,
         profile: cloneProfile(profile),
         certCommonName: ''
       };
+      
+      this.notifyChanged();
+      // 抛出错误让 UI 层也能感知！
+      throw new Error(`${friendlyMsg}: ${errorMsg}`);
     }
 
     this.startEventPolling(sessionId);
@@ -127,8 +145,11 @@ class SessionManagerImpl {
   }
 
   async disconnect(sessionId: number): Promise<void> {
+    logger.info(LogTags.SESSION_MANAGER, `Disconnecting session ${sessionId}`);
+    
     const record: SessionRecord | undefined = this.sessions.get(sessionId);
     if (record === undefined) {
+      logger.warn(LogTags.SESSION_MANAGER, `Session ${sessionId} not found for disconnect`);
       return;
     }
 
@@ -136,14 +157,16 @@ class SessionManagerImpl {
 
     try {
       await sessionBridge.disconnect(sessionId);
-    } catch (_e) {
+      logger.info(LogTags.SESSION_MANAGER, `Session ${sessionId} disconnected successfully`);
+    } catch (e) {
+      logger.error(LogTags.SESSION_MANAGER, `Failed to disconnect session ${sessionId}`, e);
     }
 
     record.state = {
       sessionId: record.state.sessionId,
       stage: SessionStage.Disconnected,
       title: record.state.title,
-      message: '连接已断开',
+      message: i18n.get(i18n.currentLocale(), 'session.disconnected'),
       profile: record.state.profile,
       certCommonName: record.state.certCommonName
     };
@@ -282,6 +305,7 @@ class SessionManagerImpl {
   private pollSessionEvents(sessionId: number): void {
     const record: SessionRecord | undefined = this.sessions.get(sessionId);
     if (record === undefined) {
+      logger.warn(LogTags.SESSION_MANAGER, `Session ${sessionId} not found during event polling, stopping`);
       this.stopEventPolling(sessionId);
       return;
     }
@@ -289,7 +313,8 @@ class SessionManagerImpl {
     let events: SessionEvent[];
     try {
       events = sessionBridge.drainEvents(sessionId);
-    } catch (_e) {
+    } catch (e) {
+      logger.error(LogTags.SESSION_MANAGER, `Failed to drain events for session ${sessionId}`, e);
       return;
     }
 
@@ -311,8 +336,10 @@ class SessionManagerImpl {
         record.authUsername = event.authUsername;
         record.authDomain = event.authDomain;
         shouldRefreshState = true;
+        logger.info(LogTags.SESSION_MANAGER, `Auth required for session ${sessionId}`);
       } else if (event.type === SessionEventType.CertRequired) {
         shouldRefreshState = true;
+        logger.info(LogTags.SESSION_MANAGER, `Cert verification required for session ${sessionId}`);
       }
       index += 1;
     }
@@ -326,14 +353,16 @@ class SessionManagerImpl {
           this.notifyCnDiscovered(sessionId, newState.certCommonName);
         }
         record.state = newState;
-      } catch (_e) {
+      } catch (e) {
+        logger.error(LogTags.SESSION_MANAGER, `Failed to refresh state for session ${sessionId}`, e);
       }
     }
     if (shouldRefreshSnapshot) {
       try {
         record.snapshot = sessionBridge.getSnapshot(sessionId);
         this.lastObservedFrameSequences.set(sessionId, record.snapshot.frameSequence);
-      } catch (_e) {
+      } catch (e) {
+        logger.error(LogTags.SESSION_MANAGER, `Failed to refresh snapshot for session ${sessionId}`, e);
       }
     }
 

@@ -23,6 +23,12 @@ interface MarkdownBlock {
   text: string;
 }
 
+interface ToastMessage {
+  id: number;
+  text: string;
+  isError: boolean;
+}
+
 const MARKDOWN_BLOCK_PARAGRAPH = 0;
 const MARKDOWN_BLOCK_HEADING = 1;
 const MARKDOWN_BLOCK_BULLET = 2;
@@ -57,14 +63,30 @@ struct Index {
   @State selectedConnId: string = '';
   @State showDetail: boolean = false;
   @State showDeleteConfirm: boolean = false;
+  @State toastMessages: ToastMessage[] = [];
   private unsubSessionChanged: (() => void) | null = null;
   private unsubWindowClosed: (() => void) | null = null;
   private unsubCnDiscovered: (() => void) | null = null;
   private refreshTimer: number = -1;
   private connectionListScroller: Scroller = new Scroller();
+  private nextToastId: number = 1;
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
+  }
+
+  private showToast(text: string, isError: boolean = false): void {
+    const toastId = this.nextToastId++;
+    this.toastMessages.push({ id: toastId, text, isError });
+    
+    // 3秒后自动移除
+    setTimeout(() => {
+      this.removeToast(toastId);
+    }, 3000);
+  }
+
+  private removeToast(id: number): void {
+    this.toastMessages = this.toastMessages.filter(t => t.id !== id);
   }
 
   private isPhoneLayout(): boolean {
@@ -355,31 +377,42 @@ struct Index {
 
     const profile = this.homeViewModel.profile;
     if (!this.homeViewModel.canConnect) {
-      this.homeViewModel.lastMessage = i18n.get(this.appLanguage, 'please_fill_host_and_user');
+      const msg = i18n.get(this.appLanguage, 'please_fill_host_and_user');
+      this.homeViewModel.lastMessage = msg;
+      this.showToast(msg, true);
       return;
     }
 
     this.isConnecting = true;
     this.homeViewModel.lastMessage = i18n.get(this.appLanguage, 'connecting_msg');
+    this.showToast(i18n.get(this.appLanguage, 'connecting_msg'));
 
     try {
       const sessionId: number = await sessionManager.createAndConnect(profile);
       if (sessionId <= 0) {
-        this.homeViewModel.lastMessage = i18n.get(this.appLanguage, 'create_session_failed');
+        const msg = i18n.get(this.appLanguage, 'create_session_failed');
+        this.homeViewModel.lastMessage = msg;
+        this.showToast(msg, true);
         this.isConnecting = false;
         return;
       }
 
       const opened: boolean = await sessionWindowManager.openSessionWindow(sessionId, profile);
       if (!opened) {
-        this.homeViewModel.lastMessage = i18n.get(this.appLanguage, 'open_window_failed');
+        const msg = i18n.get(this.appLanguage, 'open_window_failed');
+        this.homeViewModel.lastMessage = msg;
+        this.showToast(msg, true);
         await sessionManager.disconnect(sessionId);
         sessionManager.removeSession(sessionId);
       } else {
-        this.homeViewModel.lastMessage = `${i18n.get(this.appLanguage, 'connected_to')} ${profile.host}${i18n.get(this.appLanguage, 'remote_window_opened')}`;
+        const msg = `${i18n.get(this.appLanguage, 'connected_to')} ${profile.host}${i18n.get(this.appLanguage, 'remote_window_opened')}`;
+        this.homeViewModel.lastMessage = msg;
+        this.showToast(msg);
       }
     } catch (e) {
-      this.homeViewModel.lastMessage = i18n.get(this.appLanguage, 'connect_failed_prefix') + (e as Error).message;
+      const msg = i18n.get(this.appLanguage, 'connect_failed_prefix') + (e as Error).message;
+      this.homeViewModel.lastMessage = msg;
+      this.showToast(msg, true);
     }
 
     this.isConnecting = false;
@@ -440,7 +473,11 @@ struct Index {
     this.selectedConnId = id;
     const c = this.homeViewModel.bookmarks.find((it: ConnectionProfile) => it.id === id);
     if (c) {
+      const oldMessage = this.homeViewModel.lastMessage;
       this.homeViewModel.applyBookmark(c);
+      if (this.homeViewModel.lastMessage !== oldMessage) {
+        this.showToast(this.homeViewModel.lastMessage);
+      }
     }
   }
 
@@ -463,9 +500,46 @@ struct Index {
       this.buildAboutOverlay()
       this.buildAgreementOverlay()
       this.buildDeleteConfirmDialog()
+      this.buildToast()
     }
     .width('100%')
     .height('100%')
+  }
+
+  @Builder
+  private buildToast(): void {
+    Column({ space: 10 }) {
+      ForEach(this.toastMessages, (toast: ToastMessage) => {
+        Row() {
+          Text(toast.text)
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(toast.isError ? this.colors.toastErrorText : this.colors.toastSuccessText)
+            .maxLines(4)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .padding({ left: 18, right: 18, top: 14, bottom: 14 })
+        .backgroundColor(toast.isError ? this.colors.toastErrorBg : this.colors.toastSuccessBg)
+        .borderRadius(16)
+        .border({
+          width: 1.5,
+          color: toast.isError ? this.colors.toastErrorBorder : this.colors.toastSuccessBorder
+        })
+        .shadow({ 
+          radius: 12, 
+          color: toast.isError ? 'rgba(220,38,38,0.15)' : 'rgba(22,163,74,0.12)',
+          offsetX: 0, 
+          offsetY: 4 
+        })
+        .width('90%')
+        .constraintSize({ maxWidth: 500 })
+      }, (toast: ToastMessage) => toast.id.toString())
+    }
+    .width('100%')
+    .position({ x: 0, y: 20 })
+    .padding({ top: 16 })
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
@@ -913,7 +987,18 @@ struct Index {
             onGatewayDomainChange: (value: string) => this.homeViewModel.updateGatewayDomain(value),
             onClipboardChange: (value: boolean) => this.homeViewModel.toggleClipboard(value),
             onNew: () => { this.homeViewModel.createNewProfile(); this.selectedConnId = ''; },
-            onSave: () => { void this.homeViewModel.saveCurrentProfile(); },
+            onSave: () => { 
+              void (async () => {
+                const oldMessage = this.homeViewModel.lastMessage;
+                await this.homeViewModel.saveCurrentProfile();
+                if (this.homeViewModel.lastMessage !== oldMessage) {
+                  // 检查消息是否是错误或成功
+                  const isError = this.homeViewModel.lastMessage.includes('error') || 
+                                  this.homeViewModel.lastMessage.includes('失败');
+                  this.showToast(this.homeViewModel.lastMessage, isError);
+                }
+              })();
+            },
             canConnect: this.homeViewModel.canConnect && !this.isConnecting,
             onConnect: () => { void this.connectAndOpenWindow(); }
           })
@@ -974,7 +1059,15 @@ struct Index {
               .backgroundColor(this.colors.destructive)
               .borderRadius(10)
               .onClick(() => {
-                void this.homeViewModel.deleteBookmark(this.selectedConnId);
+                void (async () => {
+                  const oldMessage = this.homeViewModel.lastMessage;
+                  await this.homeViewModel.deleteBookmark(this.selectedConnId);
+                  if (this.homeViewModel.lastMessage !== oldMessage) {
+                    const isError = this.homeViewModel.lastMessage.includes('error') || 
+                                    this.homeViewModel.lastMessage.includes('失败');
+                    this.showToast(this.homeViewModel.lastMessage, isError);
+                  }
+                })();
                 this.selectedConnId = '';
                 this.showDeleteConfirm = false;
                 this.showDetail = false;

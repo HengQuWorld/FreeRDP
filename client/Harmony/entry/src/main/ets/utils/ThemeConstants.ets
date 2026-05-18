@@ -40,6 +40,15 @@ export interface ThemeColors {
   gradientEnd: string;
   surfaceElevated: string;
   surfaceElevatedBorder: string;
+  toastSuccessBg: string;
+  toastSuccessBorder: string;
+  toastSuccessText: string;
+  toastErrorBg: string;
+  toastErrorBorder: string;
+  toastErrorText: string;
+  toastInfoBg: string;
+  toastInfoBorder: string;
+  toastInfoText: string;
 }
 
 export const LightColors: ThemeColors = {
@@ -83,7 +92,16 @@ export const LightColors: ThemeColors = {
   gradientStart: '#e8f4f2',
   gradientEnd: '#f0f7f6',
   surfaceElevated: '#ffffff',
-  surfaceElevatedBorder: '#e2e0dc'
+  surfaceElevatedBorder: '#e2e0dc',
+  toastSuccessBg: '#ecfdf3',
+  toastSuccessBorder: '#16a34a',
+  toastSuccessText: '#065f46',
+  toastErrorBg: '#fef2f2',
+  toastErrorBorder: '#dc2626',
+  toastErrorText: '#7f1d1d',
+  toastInfoBg: '#eff6ff',
+  toastInfoBorder: '#2563eb',
+  toastInfoText: '#1e40af'
 };
 
 export const DarkColors: ThemeColors = {
@@ -127,7 +145,16 @@ export const DarkColors: ThemeColors = {
   gradientStart: 'rgba(95,184,184,0.06)',
   gradientEnd: 'transparent',
   surfaceElevated: '#141f22',
-  surfaceElevatedBorder: '#1f2f33'
+  surfaceElevatedBorder: '#1f2f33',
+  toastSuccessBg: 'rgba(22,163,74,0.15)',
+  toastSuccessBorder: '#16a34a',
+  toastSuccessText: '#6ee7b7',
+  toastErrorBg: 'rgba(220,38,38,0.15)',
+  toastErrorBorder: '#dc2626',
+  toastErrorText: '#fca5a5',
+  toastInfoBg: 'rgba(37,99,235,0.15)',
+  toastInfoBorder: '#2563eb',
+  toastInfoText: '#93c5fd'
 };
 
 const THEME_KEY: string = '__app_theme_mode__';

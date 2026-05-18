@@ -2,6 +2,7 @@ import { ConnectionProfile, createEmptyProfile, cloneProfile } from '../model/Co
 import { BookmarkService } from '../service/BookmarkService';
 import { IdGenerator } from '../utils/IdGenerator';
 import { i18n } from '../utils/I18n';
+import { logger, LogTags } from '../utils/Logger';
 import common from '@ohos.app.ability.common';
 
 @Observed
@@ -24,10 +25,18 @@ export class HomeViewModel {
   }
 
   async initialize(context: common.UIAbilityContext): Promise<void> {
+    logger.info(LogTags.HOME_VIEWMODEL, 'Initializing HomeViewModel');
     this.context = context;
-    const fallbackId: string = this.profile.id.length > 0 ? this.profile.id : IdGenerator.next('profile');
-    this.profile = await this.bookmarkService.loadDraft(context, fallbackId);
-    this.bookmarks = await this.bookmarkService.list(context);
+    
+    try {
+      const fallbackId: string = this.profile.id.length > 0 ? this.profile.id : IdGenerator.next('profile');
+      this.profile = await this.bookmarkService.loadDraft(context, fallbackId);
+      this.bookmarks = await this.bookmarkService.list(context);
+      logger.info(LogTags.HOME_VIEWMODEL, `Loaded ${this.bookmarks.length} bookmarks`);
+    } catch (e) {
+      logger.error(LogTags.HOME_VIEWMODEL, 'Failed to initialize bookmarks', e);
+      this.lastMessage = i18n.get(i18n.currentLocale(), 'error.bookmark_load_failed');
+    }
   }
 
   private persistDraft(): void {
@@ -151,9 +160,21 @@ export class HomeViewModel {
   }
 
   async deleteBookmark(profileId: string): Promise<void> {
-    if (this.context === null) return;
-    await this.bookmarkService.delete(this.context, profileId);
-    this.bookmarks = await this.bookmarkService.list(this.context);
+    if (this.context === null) {
+      logger.warn(LogTags.HOME_VIEWMODEL, 'Context is null, cannot delete bookmark');
+      return;
+    }
+    
+    try {
+      logger.info(LogTags.HOME_VIEWMODEL, `Deleting bookmark: ${profileId}`);
+      await this.bookmarkService.delete(this.context, profileId);
+      this.bookmarks = await this.bookmarkService.list(this.context);
+      this.lastMessage = i18n.get(i18n.currentLocale(), 'bookmark_deleted');
+      logger.info(LogTags.HOME_VIEWMODEL, 'Bookmark deleted successfully');
+    } catch (e) {
+      logger.error(LogTags.HOME_VIEWMODEL, 'Failed to delete bookmark', e);
+      this.lastMessage = i18n.get(i18n.currentLocale(), 'error.bookmark_delete_failed');
+    }
   }
 
   applyBookmark(profile: ConnectionProfile): void {
@@ -170,17 +191,26 @@ export class HomeViewModel {
   async saveCurrentProfile(): Promise<void> {
     const context = this.context;
     if (context === null) {
+      logger.warn(LogTags.HOME_VIEWMODEL, 'Context is null, cannot save bookmark');
       this.lastMessage = i18n.get(i18n.currentLocale(), 'bookmark_service_not_initialized');
       return;
     }
-    const saved: ConnectionProfile = this.copyProfile(this.profile);
-    saved.id = this.isEditingBookmark ? this.profile.id : IdGenerator.next('bookmark');
-    saved.name = this.profile.name.length > 0 ? this.profile.name : this.profile.host;
-    await this.bookmarkService.save(context, saved);
-    this.isEditingBookmark = true;
-    this.bookmarks = await this.bookmarkService.list(context);
-    this.profile = this.copyProfile(saved);
-    this.persistDraft();
-    this.lastMessage = i18n.get(i18n.currentLocale(), 'bookmark_saved');
+    
+    try {
+      logger.info(LogTags.HOME_VIEWMODEL, `Saving bookmark: ${this.profile.name}`);
+      const saved: ConnectionProfile = this.copyProfile(this.profile);
+      saved.id = this.isEditingBookmark ? this.profile.id : IdGenerator.next('bookmark');
+      saved.name = this.profile.name.length > 0 ? this.profile.name : this.profile.host;
+      await this.bookmarkService.save(context, saved);
+      this.isEditingBookmark = true;
+      this.bookmarks = await this.bookmarkService.list(context);
+      this.profile = this.copyProfile(saved);
+      this.persistDraft();
+      this.lastMessage = i18n.get(i18n.currentLocale(), 'bookmark_saved');
+      logger.info(LogTags.HOME_VIEWMODEL, 'Bookmark saved successfully');
+    } catch (e) {
+      logger.error(LogTags.HOME_VIEWMODEL, 'Failed to save bookmark', e);
+      this.lastMessage = i18n.get(i18n.currentLocale(), 'error.bookmark_save_failed');
+    }
   }
 }

@@ -2,6 +2,7 @@ import { ConnectionProfile, cloneProfile } from '../model/ConnectionProfile';
 import { SessionEvent, SessionEventType, SessionSnapshot, SessionStage, SessionState } from '../model/SessionModels';
 import { sessionBridge } from '../service/SessionNativeBridge';
 import { i18n } from '../utils/I18n';
+import { logger, LogTags } from '../utils/Logger';
 
 @Observed
 export class SessionViewModel {
@@ -45,6 +46,8 @@ export class SessionViewModel {
   }
 
   async connect(): Promise<void> {
+    logger.info(LogTags.SESSION_VIEWMODEL, `Starting connection to ${this.state.profile.host}`);
+    
     const sessionId: number = sessionBridge.createSession(this.state.profile);
     const connectingState: SessionState = this.copyState(this.state);
     connectingState.sessionId = sessionId;
@@ -52,10 +55,16 @@ export class SessionViewModel {
     connectingState.message = i18n.get(i18n.currentLocale(), 'connecting_msg');
     this.state = connectingState;
 
-    const connected: SessionState = await sessionBridge.connect(sessionId);
-    this.snapshot = sessionBridge.getSnapshot(sessionId);
-    this.lastObservedFrameSequence = this.snapshot.frameSequence;
-    this.state = connected;
+    try {
+      const connected: SessionState = await sessionBridge.connect(sessionId);
+      this.snapshot = sessionBridge.getSnapshot(sessionId);
+      this.lastObservedFrameSequence = this.snapshot.frameSequence;
+      this.state = connected;
+      logger.info(LogTags.SESSION_VIEWMODEL, `Connection established, session ID: ${sessionId}`);
+    } catch (e) {
+      const errorMsg: string = logger.logException(LogTags.SESSION_VIEWMODEL, 'Connection', e);
+      this.setFailure(`${i18n.get(i18n.currentLocale(), 'session.connect_failed')}: ${errorMsg}`);
+    }
   }
 
   setFailure(message: string): void {
@@ -66,11 +75,18 @@ export class SessionViewModel {
   }
 
   async disconnect(): Promise<void> {
-    await sessionBridge.disconnect(this.state.sessionId);
-    const disconnectedState: SessionState = this.copyState(this.state);
-    disconnectedState.stage = SessionStage.Disconnected;
-    disconnectedState.message = i18n.get(i18n.currentLocale(), 'disconnected_msg');
-    this.state = disconnectedState;
+    logger.info(LogTags.SESSION_VIEWMODEL, `Disconnecting session ${this.state.sessionId}`);
+    
+    try {
+      await sessionBridge.disconnect(this.state.sessionId);
+      const disconnectedState: SessionState = this.copyState(this.state);
+      disconnectedState.stage = SessionStage.Disconnected;
+      disconnectedState.message = i18n.get(i18n.currentLocale(), 'disconnected_msg');
+      this.state = disconnectedState;
+      logger.info(LogTags.SESSION_VIEWMODEL, 'Disconnected successfully');
+    } catch (e) {
+      logger.error(LogTags.SESSION_VIEWMODEL, 'Failed to disconnect', e);
+    }
   }
 
   refreshState(): void {
@@ -93,7 +109,14 @@ export class SessionViewModel {
       return;
     }
 
-    const events: SessionEvent[] = sessionBridge.drainEvents(this.state.sessionId);
+    let events: SessionEvent[];
+    try {
+      events = sessionBridge.drainEvents(this.state.sessionId);
+    } catch (e) {
+      logger.error(LogTags.SESSION_VIEWMODEL, 'Failed to drain events', e);
+      return;
+    }
+
     let shouldRefreshState: boolean = false;
     let shouldRefreshSnapshot: boolean = false;
     let index: number = 0;
@@ -109,19 +132,29 @@ export class SessionViewModel {
         this.remoteClipboardText = event.clipboardText;
       } else if (event.type === SessionEventType.AuthRequired) {
         shouldRefreshState = true;
+        logger.info(LogTags.SESSION_VIEWMODEL, 'Auth required event received');
         this.onAuthRequired(event);
       } else if (event.type === SessionEventType.CertRequired) {
         shouldRefreshState = true;
+        logger.info(LogTags.SESSION_VIEWMODEL, 'Cert required event received');
         this.onCertRequired(event);
       }
       index += 1;
     }
 
     if (shouldRefreshState) {
-      this.refreshState();
+      try {
+        this.refreshState();
+      } catch (e) {
+        logger.error(LogTags.SESSION_VIEWMODEL, 'Failed to refresh state', e);
+      }
     }
     if (shouldRefreshSnapshot) {
-      this.refreshSnapshot();
+      try {
+        this.refreshSnapshot();
+      } catch (e) {
+        logger.error(LogTags.SESSION_VIEWMODEL, 'Failed to refresh snapshot', e);
+      }
     }
   }
 

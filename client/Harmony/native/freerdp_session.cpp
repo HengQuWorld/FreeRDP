@@ -747,6 +747,10 @@ static int HarmonyRdpClientEntry(RDP_CLIENT_ENTRY_POINTS* entryPoints) {
 
 }  // namespace
 
+// 静态成员初始化
+std::vector<FreeRDPHarmonySession::ConnectionHistory> FreeRDPHarmonySession::connectionHistory_;
+std::mutex FreeRDPHarmonySession::historyMutex_;
+
 FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
     : config_(std::move(config)),
       snapshot_{ 0, 0, 0, 0, 0, 0 },
@@ -762,7 +766,29 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       stopRequested_(false),
       nativeWindow_(nullptr),
       dialogAnswered_(false),
-      certAccepted_(false) {}
+      certAccepted_(false),
+      currentConnectionAttempt_(0),
+      maxConnectionAttempts_(5),
+      enableAdaptiveParameters_(true),
+      useHighPerformanceMode_(false),
+      lastErrorType_(""),
+      lastSuccessfulProtocol_("") {
+  // 初始化安全协议优先级 - 从最安全到最兼容
+  securityProtocolOrder_ = {
+    "nla,tls,rdp",  // 优先尝试 NLA + TLS + RDP（适用于 Win11/Win10）
+    "nla,tls",      // NLA + TLS
+    "tls,rdp",      // TLS + RDP
+    "rdp",          // 仅 RDP（适用于老版本系统）
+    "nla",          // 仅 NLA
+    "tls"           // 仅 TLS
+  };
+  
+  // 检查是否有历史记录可以优化初始协议选择
+  lastSuccessfulProtocol_ = FindBestProtocolForHost(config_.host, config_.port);
+  if (!lastSuccessfulProtocol_.empty()) {
+    HiLogInfo("Found historical protocol for " + config_.host + ": " + lastSuccessfulProtocol_);
+  }
+}
 
 FreeRDPHarmonySession::~FreeRDPHarmonySession() {
   Disconnect();
@@ -803,6 +829,8 @@ bool FreeRDPHarmonySession::Connect() {
     if (worker_.joinable()) {
       staleWorker = std::move(worker_);
     }
+    // 重置连接尝试计数
+    ResetConnectionAttempt();
   }
 
   if (staleWorker.joinable()) {
@@ -823,7 +851,8 @@ bool FreeRDPHarmonySession::Connect() {
   }
   stateChanged_.notify_all();
 
-  worker_ = std::thread(&FreeRDPHarmonySession::ThreadMain, this);
+  // 使用带重试机制的线程函数
+  worker_ = std::thread(&FreeRDPHarmonySession::ThreadMainWithRetry, this);
   return true;
 }
 
@@ -1595,7 +1624,8 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   std::vector<std::string> args;
   const bool hasCredentials = !config_.username.empty() && !config_.password.empty();
   HiLogInfo("BuildCommandLineArgs: hasCredentials=" + std::string(hasCredentials ? "true" : "false") +
-            " configMode=" + config_.securityMode);
+            " configMode=" + config_.securityMode + 
+            " attempt=" + std::to_string(currentConnectionAttempt_ + 1));
   args.emplace_back("freerdp-harmony");
   args.emplace_back("/gdi:sw");
   args.emplace_back("/v:" + config_.host);
@@ -1606,20 +1636,33 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
     args.emplace_back("/client-hostname:" + config_.clientHostname);
   }
 
+  // 凭据处理
   if (hasCredentials) {
     args.emplace_back("/u:" + config_.username);
     args.emplace_back("/p:" + config_.password);
     if (!config_.domain.empty()) {
       args.emplace_back("/d:" + config_.domain);
     }
-    const std::string secMode = ToLower(config_.securityMode);
-    if (!secMode.empty() && secMode != "auto") {
-      args.emplace_back("/sec:" + secMode);
-    }
-  } else {
-    args.emplace_back("/p");
-    args.emplace_back("/sec:tls,rdp");
   }
+  // 不提供初始凭据时，让 FreeRDP 在需要时通过回调请求认证
+
+  // 智能安全协议选择
+  const std::string secMode = ToLower(config_.securityMode);
+  if (!secMode.empty() && secMode != "auto") {
+    // 用户明确指定了安全模式，使用用户指定的
+    args.emplace_back("/sec:" + secMode);
+    HiLogInfo("Using user-specified security mode: " + secMode);
+  } else {
+    // 自动模式，使用智能协议选择
+    auto protocols = GetSecurityProtocolsForAttempt();
+    if (!protocols.empty()) {
+      args.emplace_back("/sec:" + protocols[0]);
+      HiLogInfo("Using auto security mode for attempt " + std::to_string(currentConnectionAttempt_ + 1) + 
+                ": " + protocols[0]);
+    }
+  }
+
+  // 网关配置
   if (!config_.gateway.empty()) {
     std::string gatewayArg = "/gateway:g:" + config_.gateway;
     if (!config_.gatewayUsername.empty()) {
@@ -1634,20 +1677,27 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
     args.emplace_back(gatewayArg);
   }
 
+  // 桌面配置
   const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1280U;
   const std::uint32_t desktopHeight = config_.desktopHeight > 0 ? config_.desktopHeight : 720U;
   args.emplace_back("/size:" + std::to_string(desktopWidth) + "x" +
                     std::to_string(desktopHeight));
   args.emplace_back("/bpp:32");
-  if (config_.enableGfx) {
+  
+  // 性能相关参数 - 根据尝试次数和模式调整
+  if (config_.enableGfx && !useHighPerformanceMode_) {
     args.emplace_back("/gfx");
   }
   args.emplace_back("/network:auto");
   args.emplace_back("-multitransport");
   args.emplace_back("/dynamic-resolution");
+  
+  // 证书处理
   if (config_.ignoreCertificate) {
     args.emplace_back("/cert:ignore");
   }
+  
+  // 日志级别
   args.emplace_back("/log-level:TRACE");
   args.emplace_back(config_.enableClipboard ? "/clipboard" : "-clipboard");
 
@@ -1812,4 +1862,385 @@ void FreeRDPHarmonySession::ThreadMain() {
     started_ = false;
   }
   stateChanged_.notify_all();
+}
+
+void FreeRDPHarmonySession::ThreadMainWithRetry() {
+  bool connected = false;
+  
+  while (!connected) {
+    bool stopRequested = false;
+    std::string currentProtocol;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopRequested = stopRequested_;
+      if (stopRequested) {
+        break;
+      }
+      // 更新状态信息显示当前尝试
+      info_.message = GetCurrentAttemptDescription();
+      // 获取当前使用的协议
+      auto protocols = GetSecurityProtocolsForAttempt();
+      if (!protocols.empty()) {
+        currentProtocol = protocols[0];
+      }
+    }
+    stateChanged_.notify_all();
+    
+    HiLogInfo("Connection attempt " + std::to_string(currentConnectionAttempt_ + 1) + 
+              "/" + std::to_string(maxConnectionAttempts_) + 
+              ": " + GetCurrentAttemptDescription());
+    
+    // 确保上下文已准备好
+    if (context_ == nullptr) {
+      if (!EnsureContext()) {
+        break;
+      }
+    }
+    
+    // 调整参数
+    AdjustParametersForAttempt();
+    
+    // 尝试连接（使用原始 ThreadMain 的逻辑）
+    rdpContext* context = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      context = static_cast<rdpContext*>(context_);
+    }
+    
+    if (context == nullptr || context->instance == nullptr) {
+      UpdateStage(HarmonySessionStage::kFailed, 1, "error.rdp_context_unavailable");
+      break;
+    }
+    
+    freerdp* instance = context->instance;
+    std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> handles = {};
+    
+    if (freerdp_client_start(context) != 0) {
+      UpdateStage(HarmonySessionStage::kFailed, 1, "error.start_client");
+      break;
+    }
+    
+    const bool supportSkipChannelJoin =
+        freerdp_settings_get_bool(context->settings, FreeRDP_SupportSkipChannelJoin);
+    WLog_INFO(TAG, "before connect: FreeRDP_SupportSkipChannelJoin=%s",
+              supportSkipChannelJoin ? "true" : "false");
+    
+    // 使用同步方式连接，移除可能导致崩溃的异步机制
+    HiLogInfo("Starting connection attempt...");
+    bool connectionSuccess = freerdp_connect(instance);
+    
+    if (connectionSuccess) {
+      HiLogInfo("Connection successful on attempt " + std::to_string(currentConnectionAttempt_ + 1));
+      
+      // 保存成功的协议到历史记录
+      if (!currentProtocol.empty()) {
+        SaveSuccessfulProtocol(config_.host, config_.port, currentProtocol);
+      }
+      
+      connected = true;
+      
+      // 连接成功后，正常的会话循环
+      while (true) {
+        bool shouldStop = false;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          shouldStop = stopRequested_;
+        }
+        
+        if (shouldStop || freerdp_shall_disconnect_context(context)) {
+          break;
+        }
+        
+        DWORD count = 0;
+        HANDLE inputEventHandle = static_cast<HANDLE>(inputEventHandle_);
+        if (inputEventHandle != nullptr) {
+          handles[count++] = inputEventHandle;
+        }
+        
+        const DWORD remoteHandleCount = freerdp_get_event_handles(
+            context, &handles[count], static_cast<DWORD>(handles.size() - count));
+        if (remoteHandleCount == 0) {
+          const std::uint32_t lastError = freerdp_get_last_error(context);
+          UpdateStage(HarmonySessionStage::kFailed, lastError,
+                      "error.get_event_handles");
+          break;
+        }
+        count += remoteHandleCount;
+        
+        const DWORD status = WaitForMultipleObjects(count, handles.data(), FALSE, INFINITE);
+        
+        if (status == WAIT_FAILED) {
+          const std::uint32_t lastError = freerdp_get_last_error(context);
+          UpdateStage(HarmonySessionStage::kFailed, lastError,
+                      "error.wait_events");
+          break;
+        }
+        
+        if (!freerdp_check_event_handles(context)) {
+          bool stopping = false;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping = stopRequested_;
+          }
+          
+          if (!stopping) {
+            const std::uint32_t lastError = freerdp_get_last_error(context);
+            UpdateStage(HarmonySessionStage::kFailed, lastError,
+                        "error.process_events");
+          }
+          break;
+        }
+        
+        if (!ProcessInputEvents(context->input)) {
+          bool stopping = false;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping = stopRequested_;
+          }
+          
+          if (!stopping) {
+            const std::uint32_t lastError = freerdp_get_last_error(context);
+            UpdateStage(HarmonySessionStage::kFailed, lastError,
+                        "error.process_input");
+          }
+          break;
+        }
+      }
+    } else {
+      // 连接失败，记录错误
+      const std::uint32_t lastError = freerdp_get_last_error(context);
+      const char* lastErrorString = freerdp_get_last_error_string(lastError);
+      std::string errorStr = lastErrorString ? lastErrorString : "unknown";
+      
+      // 保存错误类型用于下一次尝试的优化
+      lastErrorType_ = errorStr;
+      
+      HiLogError("Connection failed on attempt " + std::to_string(currentConnectionAttempt_ + 1) + 
+                 ", error: " + errorStr);
+      
+      freerdp_client_stop(context);
+      
+      // 检查是否还有更多尝试
+      if (!PrepareNextConnectionAttempt()) {
+        // 没有更多尝试了
+        UpdateStage(HarmonySessionStage::kFailed, lastError,
+                    "error.connect_failed_all_attempts");
+        break;
+      }
+      
+      // 释放上下文并准备重试
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (context_ != nullptr) {
+          freerdp_client_context_free(static_cast<rdpContext*>(context_));
+          context_ = nullptr;
+        }
+      }
+      
+      // 短暂延迟后重试
+      std::this_thread::sleep_for(std::chrono::milliseconds(500));
+      
+      // 重新创建上下文
+      if (!EnsureContext()) {
+        break;
+      }
+    }
+  }
+  
+  // 清理
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    started_ = false;
+  }
+  stateChanged_.notify_all();
+}
+
+void FreeRDPHarmonySession::ResetConnectionAttempt() {
+  currentConnectionAttempt_ = 0;
+  lastErrorType_ = "";
+  useHighPerformanceMode_ = false;
+}
+
+bool FreeRDPHarmonySession::PrepareNextConnectionAttempt() {
+  currentConnectionAttempt_++;
+  if (currentConnectionAttempt_ >= maxConnectionAttempts_) {
+    return false;
+  }
+  
+  // 智能决策：根据之前的错误类型快速调整策略
+  if (!lastErrorType_.empty()) {
+    // NLA/CredSSP 错误 -> 跳过 NLA 相关协议
+    if (lastErrorType_.find("NLA") != std::string::npos || 
+        lastErrorType_.find("CredSSP") != std::string::npos ||
+        lastErrorType_.find("authentication") != std::string::npos) {
+      HiLogInfo("Skipping NLA-based protocols due to previous authentication error");
+      // 跳到非 NLA 协议
+      if (currentConnectionAttempt_ < 2) {
+        currentConnectionAttempt_ = 2; // 直接跳到 tls,rdp
+      }
+    }
+    
+    // TLS/证书错误 -> 跳过 TLS 相关协议
+    if (lastErrorType_.find("TLS") != std::string::npos || 
+        lastErrorType_.find("certificate") != std::string::npos ||
+        lastErrorType_.find("SSL") != std::string::npos) {
+      HiLogInfo("Skipping TLS-based protocols due to previous certificate error");
+      if (currentConnectionAttempt_ < 3) {
+        currentConnectionAttempt_ = 3; // 直接跳到 rdp
+      }
+    }
+  }
+  
+  // 确保不超过最大尝试次数
+  if (currentConnectionAttempt_ >= maxConnectionAttempts_) {
+    return false;
+  }
+  
+  return true;
+}
+
+std::vector<std::string> FreeRDPHarmonySession::GetSecurityProtocolsForAttempt() const {
+  std::vector<std::string> protocols;
+  
+  // 第一次尝试：优先使用历史记录中成功的协议
+  if (currentConnectionAttempt_ == 0 && !lastSuccessfulProtocol_.empty()) {
+    protocols.push_back(lastSuccessfulProtocol_);
+    HiLogInfo("Using historical protocol for first attempt: " + lastSuccessfulProtocol_);
+    return protocols;
+  }
+  
+  // 根据当前尝试次数选择协议
+  if (currentConnectionAttempt_ < static_cast<int>(securityProtocolOrder_.size())) {
+    protocols.push_back(securityProtocolOrder_[currentConnectionAttempt_]);
+  } else {
+    // 如果尝试次数超过预定义列表，使用循环
+    int index = currentConnectionAttempt_ % securityProtocolOrder_.size();
+    protocols.push_back(securityProtocolOrder_[index]);
+  }
+  
+  return protocols;
+}
+
+std::string FreeRDPHarmonySession::FindBestProtocolForHost(const std::string& host, int port) {
+  std::lock_guard<std::mutex> lock(historyMutex_);
+  
+  HiLogInfo("Looking for cached protocol for " + host + ":" + std::to_string(port));
+  HiLogInfo("Current history size: " + std::to_string(connectionHistory_.size()));
+  
+  auto now = std::chrono::system_clock::now();
+  auto maxAge = std::chrono::hours(24 * 7); // 1周
+  
+  std::string bestMatch = "";
+  
+  for (auto it = connectionHistory_.begin(); it != connectionHistory_.end(); ) {
+    // 清理过期记录
+    if (now - it->lastUsed > maxAge) {
+      HiLogInfo("Removing expired history entry for " + it->host);
+      it = connectionHistory_.erase(it);
+      continue;
+    }
+    
+    // 首先尝试完全匹配（主机+端口）
+    if (it->host == host && it->port == port) {
+      HiLogInfo("Found exact cached protocol for " + host + ":" + std::to_string(port) + ": " + it->protocol);
+      return it->protocol;
+    }
+    
+    // 然后尝试只匹配主机名
+    if (it->host == host && bestMatch.empty()) {
+      bestMatch = it->protocol;
+      HiLogInfo("Found host-only cached protocol for " + host + ": " + it->protocol);
+    }
+    
+    ++it;
+  }
+  
+  if (!bestMatch.empty()) {
+    return bestMatch;
+  }
+  
+  HiLogInfo("No cached protocol found for " + host + ":" + std::to_string(port));
+  return "";
+}
+
+void FreeRDPHarmonySession::SaveSuccessfulProtocol(const std::string& host, int port, const std::string& protocol) {
+  std::lock_guard<std::mutex> lock(historyMutex_);
+  
+  HiLogInfo("Saving successful protocol: " + host + ":" + std::to_string(port) + " -> " + protocol);
+  
+  // 查找是否已存在相同的记录
+  bool found = false;
+  for (auto& history : connectionHistory_) {
+    if (history.host == host && history.port == port) {
+      // 更新现有记录
+      history.protocol = protocol;
+      history.lastUsed = std::chrono::system_clock::now();
+      found = true;
+      HiLogInfo("Updated cached protocol for " + host + ":" + std::to_string(port) + ": " + protocol);
+      break;
+    }
+  }
+  
+  if (!found) {
+    // 添加新记录
+    ConnectionHistory newHistory;
+    newHistory.host = host;
+    newHistory.port = port;
+    newHistory.protocol = protocol;
+    newHistory.lastUsed = std::chrono::system_clock::now();
+    connectionHistory_.push_back(newHistory);
+    HiLogInfo("Saved new cached protocol for " + host + ":" + std::to_string(port) + ": " + protocol);
+  }
+  
+  HiLogInfo("History size after save: " + std::to_string(connectionHistory_.size()));
+  
+  // 保持历史记录数量合理
+  if (connectionHistory_.size() > 100) {
+    // 删除最旧的记录
+    std::sort(connectionHistory_.begin(), connectionHistory_.end(),
+              [](const ConnectionHistory& a, const ConnectionHistory& b) {
+                return a.lastUsed > b.lastUsed;
+              });
+    connectionHistory_.resize(100);
+  }
+}
+
+std::string FreeRDPHarmonySession::GetCurrentAttemptDescription() const {
+  auto protocols = GetSecurityProtocolsForAttempt();
+  std::string desc = "尝试 " + std::to_string(currentConnectionAttempt_ + 1) + 
+                     "/" + std::to_string(maxConnectionAttempts_);
+  
+  if (!protocols.empty()) {
+    desc += " - 协议: " + protocols[0];
+  }
+  
+  if (useHighPerformanceMode_) {
+    desc += " (高性能模式)";
+  }
+  
+  return desc;
+}
+
+void FreeRDPHarmonySession::AdjustParametersForAttempt() {
+  if (!enableAdaptiveParameters_) {
+    return;
+  }
+  
+  // 根据尝试次数和之前的错误调整参数
+  if (currentConnectionAttempt_ >= 2) {
+    // 从第3次尝试开始，使用高性能模式（禁用一些高级特性）
+    useHighPerformanceMode_ = true;
+    HiLogInfo("Enabling high performance mode for attempt " + std::to_string(currentConnectionAttempt_ + 1));
+  }
+  
+  // 分析之前的错误并调整策略
+  if (lastErrorType_.find("NLA") != std::string::npos || 
+      lastErrorType_.find("CredSSP") != std::string::npos) {
+    HiLogInfo("Previous NLA/CredSSP error detected, will try alternative protocols");
+  }
+  
+  if (lastErrorType_.find("TLS") != std::string::npos || 
+      lastErrorType_.find("certificate") != std::string::npos) {
+    HiLogInfo("Previous TLS/certificate error detected");
+  }
 }
