@@ -128,6 +128,7 @@
     "follow_system": "Follow System",
     "session.connected": "Connected to remote desktop",
     "session.disconnected": "Disconnected",
+    "session.disconnected_with_error": "Connection lost unexpectedly",
     "session.not_connected": "Not connected",
     "session.connecting": "Connecting to remote desktop...",
     "session.login_failed": "Remote login failed",
@@ -144,11 +145,17 @@
     "error.rdp_context_unavailable": "RDP context unavailable",
     "error.start_client": "Failed to start FreeRDP client",
     "error.connect_failed": "Failed to connect to remote desktop",
+    "error.connect_failed_all_attempts": "All security protocol attempts failed, unable to connect to remote desktop",
     "error.get_event_handles": "Failed to get remote event handles",
     "error.wait_events": "Failed to wait for remote events",
     "error.process_events": "Failed to process remote events",
     "error.process_input": "Failed to process local input events",
     "error.query_info": "Unable to query session info",
-    "error.session_not_found": "Session not found"
+    "error.session_not_found": "Session not found",
+    "status.connected": "Connected",
+    "status.connecting": "Connecting",
+    "status.error": "Failed",
+    "status.disconnected": "Disconnected",
+    "status.idle": "Not connected"
   }
 }

@@ -128,6 +128,7 @@
     "follow_system": "跟随系统",
     "session.connected": "已连接到远程桌面",
     "session.disconnected": "连接已断开",
+    "session.disconnected_with_error": "连接异常断开",
     "session.not_connected": "尚未连接",
     "session.connecting": "正在连接远程桌面...",
     "session.login_failed": "远端登录失败",
@@ -144,11 +145,17 @@
     "error.rdp_context_unavailable": "RDP 上下文不可用",
     "error.start_client": "启动 FreeRDP 客户端失败",
     "error.connect_failed": "连接远程桌面失败",
+    "error.connect_failed_all_attempts": "所有安全协议尝试均失败，无法连接到远程桌面",
     "error.get_event_handles": "获取远端事件句柄失败",
     "error.wait_events": "等待远端事件失败",
     "error.process_events": "处理远端事件失败",
     "error.process_input": "处理本地输入事件失败",
     "error.query_info": "无法查询会话信息",
-    "error.session_not_found": "未找到会话"
+    "error.session_not_found": "未找到会话",
+    "status.connected": "已连接",
+    "status.connecting": "连接中",
+    "status.error": "连接失败",
+    "status.disconnected": "已断开",
+    "status.idle": "未连接"
   }
 }

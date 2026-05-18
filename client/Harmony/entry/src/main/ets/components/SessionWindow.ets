@@ -2,6 +2,7 @@ import { SessionSnapshot, SessionStage } from '../model/SessionModels';
 import { RemoteDesktopSurface } from './RemoteDesktopSurface';
 import { SessionToolbar } from './SessionToolbar';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
+import { i18n } from '../utils/I18n';
 
 @Component
 export struct SessionWindow {
@@ -9,8 +10,10 @@ export struct SessionWindow {
   @Prop title: string;
   @Prop subtitle: string;
   @Prop stage: SessionStage;
+  @Prop statusMessage: string;
   @Prop snapshot: SessionSnapshot;
   @Prop @Watch('onThemeChanged') isDark: boolean = false;
+  @Prop appLanguage: string = 'system';
   @State colors: ThemeColors = LightColors;
   getFrameBuffer: () => ArrayBuffer = (): ArrayBuffer => new ArrayBuffer(0);
   setSurfaceId: (surfaceId: string) => Promise<void> = async (_surfaceId: string): Promise<void> => {};
@@ -96,13 +99,16 @@ export struct SessionWindow {
   private getConnectionStateColor(): string {
     if (this.stage === SessionStage.Connected) return 'rgba(34,160,107,0.85)';
     if (this.stage === SessionStage.Connecting) return 'rgba(176,136,44,0.85)';
+    if (this.stage === SessionStage.Error) return 'rgba(200,40,40,0.85)';
     return 'rgba(120,113,108,0.85)';
   }
 
   private getConnectionStateText(): string {
-    if (this.stage === SessionStage.Connected) return '已连接';
-    if (this.stage === SessionStage.Connecting) return '连接中';
-    return '已断开';
+    if (this.stage === SessionStage.Connected) return i18n.get(this.appLanguage, 'status.connected');
+    if (this.stage === SessionStage.Connecting) return i18n.get(this.appLanguage, 'status.connecting');
+    if (this.stage === SessionStage.Error) return i18n.get(this.appLanguage, 'status.error');
+    if (this.stage === SessionStage.Disconnected) return i18n.get(this.appLanguage, 'status.disconnected');
+    return i18n.get(this.appLanguage, 'status.idle');
   }
 
   build() {
@@ -175,7 +181,7 @@ export struct SessionWindow {
                 .borderRadius(14)
 
               if (this.stage === SessionStage.Connected) {
-                Button(this.isFullscreen ? '退出全屏' : '全屏')
+                Button(this.isFullscreen ? i18n.get(this.appLanguage, 'exit_fullscreen') : i18n.get(this.appLanguage, 'fullscreen'))
                   .height(32)
                   .fontSize(12)
                   .fontColor('#e7e5e4')
@@ -204,6 +210,20 @@ export struct SessionWindow {
           })
           .onMouse(() => {})
           .onHover(() => {})
+
+          if (this.stage === SessionStage.Error || this.stage === SessionStage.Disconnected) {
+            Text(this.statusMessage)
+              .fontSize(12)
+              .fontColor('rgba(231,229,228,0.90)')
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+              .backgroundColor(this.stage === SessionStage.Error
+                ? 'rgba(200,40,40,0.18)' : 'rgba(120,113,108,0.18)')
+              .borderRadius(12)
+              .margin({ left: 12, right: 12, top: 6 })
+          }
 
           Blank()
             .layoutWeight(1)

@@ -17,6 +17,12 @@ interface WindowLike {
   setWindowDecorVisible?: (visible: boolean) => void;
 }
 
+interface SessionToastMessage {
+  id: number;
+  text: string;
+  isError: boolean;
+}
+
 @Entry
 @Component
 struct Session {
@@ -42,6 +48,7 @@ struct Session {
   @StorageLink('__app_is_dark_mode__') @Watch('onThemeChanged') isDark: boolean = false;
   @StorageLink('__app_language__') appLanguage: string = 'system';
   @State colors: ThemeColors = LightColors;
+  @State toastMessages: SessionToastMessage[] = [];
 
   private systemPasteboard: pasteboard.SystemPasteboard = pasteboard.getSystemPasteboard();
   private applyingRemoteClipboard: boolean = false;
@@ -52,6 +59,8 @@ struct Session {
   private hasReadPasteboardPermission: boolean = false;
   private authDialogShown: boolean = false;
   private certDialogShown: boolean = false;
+  private nextToastId: number = 1;
+  private previousStage: SessionStage = SessionStage.Idle;
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
@@ -128,6 +137,18 @@ struct Session {
     } catch (e) {}
   }
 
+  private showToast(text: string, isError: boolean = false): void {
+    const toastId: number = this.nextToastId++;
+    this.toastMessages = [...this.toastMessages, { id: toastId, text: text, isError: isError }];
+    setTimeout(() => {
+      this.removeToast(toastId);
+    }, 5000);
+  }
+
+  private removeToast(id: number): void {
+    this.toastMessages = this.toastMessages.filter((t: SessionToastMessage) => t.id !== id);
+  }
+
   private syncFromManager(): void {
     if (this.sessionId <= 0) {
       return;
@@ -147,6 +168,16 @@ struct Session {
     this.sessionSubtitle = record.state.message;
     this.sessionStage = record.state.stage;
     this.sessionSnapshot = record.snapshot;
+
+    if (this.sessionStage !== this.previousStage) {
+      if (this.sessionStage === SessionStage.Error) {
+        this.showToast(record.state.message, true);
+      } else if (this.sessionStage === SessionStage.Disconnected &&
+                 this.previousStage !== SessionStage.Idle) {
+        this.showToast(record.state.message, true);
+      }
+      this.previousStage = this.sessionStage;
+    }
 
     if (this.sessionStage === SessionStage.AuthRequired && !this.authDialogShown) {
       this.authDialogShown = true;
@@ -280,14 +311,16 @@ struct Session {
   }
 
   build() {
-    Column() {
+    Stack() {
       SessionWindow({
         sessionId: this.sessionId,
         title: this.sessionTitle,
         subtitle: this.sessionHost,
         stage: this.sessionStage,
+        statusMessage: this.sessionSubtitle,
         snapshot: this.sessionSnapshot,
         isDark: this.isDark,
+        appLanguage: this.appLanguage,
         getFrameBuffer: (): ArrayBuffer => {
           if (this.sessionId <= 0) {
             return new ArrayBuffer(0);
@@ -325,6 +358,38 @@ struct Session {
           await sessionWindowManager.closeSessionWindow(this.sessionId);
         }
       })
+
+      if (this.toastMessages.length > 0) {
+        Column({ space: 8 }) {
+          ForEach(this.toastMessages, (toast: SessionToastMessage) => {
+            Row() {
+              Text(toast.text)
+                .fontSize(14)
+                .fontColor(toast.isError ? this.colors.toastErrorText : this.colors.toastSuccessText)
+                .maxLines(3)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            .backgroundColor(toast.isError ? this.colors.toastErrorBg : this.colors.toastSuccessBg)
+            .borderRadius(10)
+            .border({
+              width: 1,
+              color: toast.isError ? this.colors.toastErrorBorder : this.colors.toastSuccessBorder
+            })
+            .shadow({
+              radius: 8,
+              color: toast.isError ? 'rgba(220,38,38,0.15)' : 'rgba(22,163,74,0.12)',
+              offsetX: 0,
+              offsetY: 4
+            })
+          }, (toast: SessionToastMessage) => toast.id.toString())
+        }
+        .width('80%')
+        .position({ x: '10%', y: 60 })
+        .zIndex(9999)
+      }
     }
     .width('100%')
     .height('100%')

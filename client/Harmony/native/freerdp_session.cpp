@@ -503,7 +503,14 @@ static void HarmonyPostDisconnect(freerdp* instance) {
   FreeRDPHarmonySession* session = SessionFromContext(instance->context);
   const std::uint32_t lastError = freerdp_get_last_error(instance->context);
   if (session != nullptr) {
-    session->UpdateStage(HarmonySessionStage::kDisconnected, lastError, "session.disconnected");
+    if (lastError != 0) {
+      const char* lastErrorString = freerdp_get_last_error_string(lastError);
+      std::string msg = "session.disconnected_with_error|||";
+      msg += (lastErrorString != nullptr) ? lastErrorString : "unknown error";
+      session->UpdateStage(HarmonySessionStage::kDisconnected, lastError, msg);
+    } else {
+      session->UpdateStage(HarmonySessionStage::kDisconnected, 0, "session.disconnected");
+    }
   }
 
   PubSub_UnsubscribeChannelConnected(instance->context->pubSub,
@@ -1773,7 +1780,8 @@ void FreeRDPHarmonySession::ThreadMain() {
     UpdateStage(stopRequested ? HarmonySessionStage::kDisconnected : HarmonySessionStage::kFailed,
                 lastError,
                 stopRequested ? "session.connection_cancelled"
-                              : "error.connect_failed");
+                              : std::string("error.connect_failed|||") +
+                                (lastErrorString != nullptr ? lastErrorString : "unknown"));
 
     const bool supportSkipChannelJoinAfterFail =
         freerdp_settings_get_bool(context->settings, FreeRDP_SupportSkipChannelJoin);
@@ -1808,8 +1816,10 @@ void FreeRDPHarmonySession::ThreadMain() {
         context, &handles[count], static_cast<DWORD>(handles.size() - count));
     if (remoteHandleCount == 0) {
       const std::uint32_t lastError = freerdp_get_last_error(context);
+      const char* errStr = freerdp_get_last_error_string(lastError);
       UpdateStage(HarmonySessionStage::kFailed, lastError,
-                  "error.get_event_handles");
+                  std::string("error.get_event_handles|||") +
+                  (errStr != nullptr ? errStr : "unknown"));
       break;
     }
     count += remoteHandleCount;
@@ -1818,8 +1828,10 @@ void FreeRDPHarmonySession::ThreadMain() {
 
     if (status == WAIT_FAILED) {
       const std::uint32_t lastError = freerdp_get_last_error(context);
+      const char* errStr = freerdp_get_last_error_string(lastError);
       UpdateStage(HarmonySessionStage::kFailed, lastError,
-                  "error.wait_events");
+                  std::string("error.wait_events|||") +
+                  (errStr != nullptr ? errStr : "unknown"));
       break;
     }
 
@@ -1832,8 +1844,10 @@ void FreeRDPHarmonySession::ThreadMain() {
 
       if (!stopping) {
         const std::uint32_t lastError = freerdp_get_last_error(context);
+        const char* errStr = freerdp_get_last_error_string(lastError);
         UpdateStage(HarmonySessionStage::kFailed, lastError,
-                    "error.process_events");
+                    std::string("error.process_events|||") +
+                    (errStr != nullptr ? errStr : "unknown"));
       }
       break;
     }
@@ -1847,8 +1861,10 @@ void FreeRDPHarmonySession::ThreadMain() {
 
       if (!stopping) {
         const std::uint32_t lastError = freerdp_get_last_error(context);
+        const char* errStr = freerdp_get_last_error_string(lastError);
         UpdateStage(HarmonySessionStage::kFailed, lastError,
-                    "error.process_input");
+                    std::string("error.process_input|||") +
+                    (errStr != nullptr ? errStr : "unknown"));
       }
       break;
     }
@@ -1961,8 +1977,10 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
             context, &handles[count], static_cast<DWORD>(handles.size() - count));
         if (remoteHandleCount == 0) {
           const std::uint32_t lastError = freerdp_get_last_error(context);
+          const char* errStr = freerdp_get_last_error_string(lastError);
           UpdateStage(HarmonySessionStage::kFailed, lastError,
-                      "error.get_event_handles");
+                      std::string("error.get_event_handles|||") +
+                      (errStr != nullptr ? errStr : "unknown"));
           break;
         }
         count += remoteHandleCount;
@@ -1971,8 +1989,10 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
         
         if (status == WAIT_FAILED) {
           const std::uint32_t lastError = freerdp_get_last_error(context);
+          const char* errStr = freerdp_get_last_error_string(lastError);
           UpdateStage(HarmonySessionStage::kFailed, lastError,
-                      "error.wait_events");
+                      std::string("error.wait_events|||") +
+                      (errStr != nullptr ? errStr : "unknown"));
           break;
         }
         
@@ -1985,8 +2005,10 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
           
           if (!stopping) {
             const std::uint32_t lastError = freerdp_get_last_error(context);
+            const char* errStr = freerdp_get_last_error_string(lastError);
             UpdateStage(HarmonySessionStage::kFailed, lastError,
-                        "error.process_events");
+                        std::string("error.process_events|||") +
+                        (errStr != nullptr ? errStr : "unknown"));
           }
           break;
         }
@@ -2000,8 +2022,10 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
           
           if (!stopping) {
             const std::uint32_t lastError = freerdp_get_last_error(context);
+            const char* errStr = freerdp_get_last_error_string(lastError);
             UpdateStage(HarmonySessionStage::kFailed, lastError,
-                        "error.process_input");
+                        std::string("error.process_input|||") +
+                        (errStr != nullptr ? errStr : "unknown"));
           }
           break;
         }
@@ -2022,9 +2046,8 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
       
       // 检查是否还有更多尝试
       if (!PrepareNextConnectionAttempt()) {
-        // 没有更多尝试了
         UpdateStage(HarmonySessionStage::kFailed, lastError,
-                    "error.connect_failed_all_attempts");
+                    std::string("error.connect_failed_all_attempts|||") + errorStr);
         break;
       }
       
