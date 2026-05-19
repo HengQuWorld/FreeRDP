@@ -217,9 +217,6 @@ export struct RemoteDesktopSurface {
       const fc = this.getUIContext()?.getFocusController?.();
       fc?.requestFocus?.(this.rootStackKey);
       fc?.requestFocus?.(this.inputLayerKey);
-      const ctrl = inputMethod.getController();
-      ctrl.hideTextInput().catch(() => {
-      });
     } catch (_error) {
     }
   }
@@ -246,7 +243,7 @@ export struct RemoteDesktopSurface {
       } catch (e) {
         console.warn(`Failed to show soft keyboard: ${e}`);
       }
-    }, 0);
+    }, 50);
   }
 
   private buildTextDelta(previous: string, next: string): TextDelta {
@@ -336,6 +333,27 @@ export struct RemoteDesktopSurface {
       return;
     }
 
+    const text: string = typeof event.keyText === 'string' ? event.keyText : '';
+    let isTextEvent: boolean = false;
+    if (text) {
+      if (event.keyCode === 0) {
+        isTextEvent = true;
+      }
+      for (const ch of text) {
+        if ((ch.codePointAt(0) ?? 0) > 0x7f) {
+          isTextEvent = true;
+          break;
+        }
+      }
+    }
+
+    if (isTextEvent) {
+      if (isDown) {
+        this.sendRemoteCommittedText(text);
+      }
+      return;
+    }
+
     const scancode: number = KeyboardMapper.mapKeyScancode(event.keyText, event.keyCode);
     if (scancode > 0) {
       this.onKeyScancode(scancode, isDown);
@@ -404,6 +422,10 @@ export struct RemoteDesktopSurface {
 
   private handleTouch(event: TouchEvent): void {
     if (this.stage !== SessionStage.Connected || event.changedTouches.length < 1) {
+      return;
+    }
+
+    if (event.source === SourceType.Mouse) {
       return;
     }
 
@@ -818,7 +840,7 @@ export struct RemoteDesktopSurface {
           .height('100%')
           .backgroundColor('rgba(0,0,0,0.001)')
           .focusable(true)
-          .focusOnTouch(false)
+          .focusOnTouch(true)
           .defaultFocus(true)
           .onAppear(() => {
             if (this.stage !== SessionStage.Connected) return;
@@ -864,9 +886,8 @@ export struct RemoteDesktopSurface {
           .fontColor(Color.Transparent)
           .backgroundColor(Color.Transparent)
           .position({ x: -100, y: -100 })
-          .focusable(true)
           .focusOnTouch(false)
-          .type(InputType.Normal)
+          .enableKeyboardOnFocus(false)
           .onChange((value: string) => {
             this.handleSoftInputChange(value);
           })
