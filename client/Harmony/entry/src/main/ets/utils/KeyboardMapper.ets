@@ -118,6 +118,7 @@ export class KeyboardMapper {
         case '0': return KeyboardMapper.RDP_SCANCODE_KEY_0;
         case '-': return KeyboardMapper.RDP_SCANCODE_OEM_MINUS;
         case '=': return KeyboardMapper.RDP_SCANCODE_OEM_PLUS;
+        case ' ': return KeyboardMapper.RDP_SCANCODE_SPACE;
       }
     }
     return 0;

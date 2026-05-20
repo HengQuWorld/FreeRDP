@@ -29,7 +29,7 @@ interface TextDelta {
 @Component
 export struct RemoteDesktopSurface {
   @Prop sessionId: number;
-  @Prop stage: SessionStage;
+  @Prop @Watch('onStageConnected') stage: SessionStage;
   @Prop snapshot: SessionSnapshot;
   @Prop keyboardRequestToken: number = 0;
   @Prop isFullscreen: boolean = false;
@@ -84,6 +84,11 @@ export struct RemoteDesktopSurface {
   private lastMouseY: number = -1;
   private ctrlPressed: boolean = false;
   private edgeClampEnabled: boolean = true;
+  private imfAttached: boolean = false;
+  private onInsertText: ((text: string) => void) | null = null;
+  private onDeleteLeft: ((length: number) => void) | null = null;
+  private onDeleteRight: ((length: number) => void) | null = null;
+  private imeSuppressTextChange: boolean = false;
 
   private surfaceController: XComponentController = new XComponentController();
 
@@ -246,6 +251,45 @@ export struct RemoteDesktopSurface {
     }, 50);
   }
 
+  private async attachInputMethod(): Promise<void> {
+    if (this.imfAttached || this.stage !== SessionStage.Connected) {
+      return;
+    }
+
+    try {
+      const config: inputMethod.TextConfig = {
+        inputAttribute: {
+          textInputType: inputMethod.TextInputType.TEXT,
+          enterKeyType: inputMethod.EnterKeyType.UNSPECIFIED
+        }
+      };
+      const controller = inputMethod.getController();
+      this.focusSoftInputLater();
+      await new Promise<void>((resolve) => setTimeout(resolve, 60));
+      await controller.attach(false, config);
+      this.imfAttached = true;
+      console.info('FreeRDP: IMF attached via attach(false)');
+    } catch (_attachErr) {
+      console.warn(`FreeRDP: attach(false) failed, trying showTextInput+hiding: ${_attachErr}`);
+      this.showSoftKeyboard();
+      setTimeout(() => {
+        try {
+          inputMethod.getController().hideTextInput();
+        } catch (_hideErr) {
+        }
+        this.imfAttached = true;
+        console.info('FreeRDP: IMF attached via showTextInput+hiding');
+      }, 100);
+      return;
+    }
+  }
+
+  onStageConnected(): void {
+    if (this.stage === SessionStage.Connected && !this.imfAttached) {
+      this.attachInputMethod();
+    }
+  }
+
   private buildTextDelta(previous: string, next: string): TextDelta {
     const prevChars: string[] = Array.from(previous ?? '');
     const nextChars: string[] = Array.from(next ?? '');
@@ -289,6 +333,7 @@ export struct RemoteDesktopSurface {
 
     for (const ch of text) {
       const codepoint: number = ch.codePointAt(0) ?? 0;
+
       if (codepoint === 10 || codepoint === 13) {
         const enter: number = KeyboardMapper.mapKeyScancode('Enter', 0);
         if (enter > 0) {
@@ -297,8 +342,21 @@ export struct RemoteDesktopSurface {
         }
         continue;
       }
-      this.onUnicodeKey(codepoint, true);
-      this.onUnicodeKey(codepoint, false);
+
+      if (codepoint > 0x7f) {
+        console.info(`RemoteDesktopSurface: sending unicode U+${codepoint.toString(16).toUpperCase()} '${ch}'`);
+        this.onUnicodeKey(codepoint, true);
+        this.onUnicodeKey(codepoint, false);
+      } else {
+        const scancode: number = KeyboardMapper.mapKeyScancode(ch, 0);
+        if (scancode > 0) {
+          this.onKeyScancode(scancode, true);
+          this.onKeyScancode(scancode, false);
+        } else {
+          this.onUnicodeKey(codepoint, true);
+          this.onUnicodeKey(codepoint, false);
+        }
+      }
     }
   }
 
@@ -306,6 +364,10 @@ export struct RemoteDesktopSurface {
     const previous: string = this.softInputDraft ?? '';
     this.softInputDraft = next;
     if (this.stage !== SessionStage.Connected) {
+      return;
+    }
+
+    if (this.imeSuppressTextChange) {
       return;
     }
 
@@ -789,13 +851,59 @@ export struct RemoteDesktopSurface {
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
     this.setSurfaceId('');
+
+    this.onInsertText = (text: string): void => {
+      if (this.stage !== SessionStage.Connected || text.length === 0) {
+        return;
+      }
+      this.imeSuppressTextChange = true;
+      console.info(`FreeRDP: IME insertText '${text}'`);
+      this.sendRemoteCommittedText(text);
+      setTimeout(() => {
+        this.imeSuppressTextChange = false;
+      }, 50);
+    };
+    this.onDeleteLeft = (length: number): void => {
+      if (this.stage !== SessionStage.Connected || length <= 0) {
+        return;
+      }
+      this.imeSuppressTextChange = true;
+      console.info(`FreeRDP: IME deleteLeft ${length}`);
+      this.sendRemoteBackspace(length);
+      setTimeout(() => {
+        this.imeSuppressTextChange = false;
+      }, 50);
+    };
+    this.onDeleteRight = (_length: number): void => {
+    };
+    try {
+      inputMethod.getController().on('insertText', this.onInsertText);
+      inputMethod.getController().on('deleteLeft', this.onDeleteLeft);
+      inputMethod.getController().on('deleteRight', this.onDeleteRight);
+    } catch (e) {
+      console.warn(`FreeRDP: IME listeners registration failed: ${e}`);
+    }
+
     this.refreshTimer = setInterval(() => {
       this.refreshPixelMap();
     }, 120);
+    if (this.stage === SessionStage.Connected && !this.imfAttached) {
+      this.attachInputMethod();
+    }
   }
 
   aboutToDisappear(): void {
+    this.imfAttached = false;
     this.setSurfaceId('');
+    if (this.onInsertText !== null) {
+      try { inputMethod.getController().off('insertText', this.onInsertText); } catch (_) {}
+    }
+    if (this.onDeleteLeft !== null) {
+      try { inputMethod.getController().off('deleteLeft', this.onDeleteLeft); } catch (_) {}
+    }
+    if (this.onDeleteRight !== null) {
+      try { inputMethod.getController().off('deleteRight', this.onDeleteRight); } catch (_) {}
+    }
     if (this.refreshTimer >= 0) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = -1;
