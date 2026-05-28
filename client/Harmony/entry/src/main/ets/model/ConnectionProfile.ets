@@ -18,7 +18,12 @@ export interface ConnectionProfile {
   enableAudio: boolean;
   enableDrive: boolean;
   enableGfx: boolean;
+  desktopWidth: number;
+  desktopHeight: number;
 }
+
+export const DEFAULT_DESKTOP_WIDTH: number = 1920;
+export const DEFAULT_DESKTOP_HEIGHT: number = 1080;
 
 export function createEmptyProfile(id: string): ConnectionProfile {
   return {
@@ -40,7 +45,9 @@ export function createEmptyProfile(id: string): ConnectionProfile {
     enableClipboard: true,
     enableAudio: false,
     enableDrive: false,
-    enableGfx: true
+    enableGfx: true,
+    desktopWidth: DEFAULT_DESKTOP_WIDTH,
+    desktopHeight: DEFAULT_DESKTOP_HEIGHT
   };
 }
 
@@ -64,6 +71,8 @@ export function cloneProfile(profile: ConnectionProfile): ConnectionProfile {
     enableClipboard: profile.enableClipboard,
     enableAudio: profile.enableAudio,
     enableDrive: profile.enableDrive,
-    enableGfx: profile.enableGfx
+    enableGfx: profile.enableGfx,
+    desktopWidth: profile.desktopWidth,
+    desktopHeight: profile.desktopHeight
   };
 }

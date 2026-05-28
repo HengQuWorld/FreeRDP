@@ -217,6 +217,13 @@ class I18nManager {
     s['security_mode'] = '安全模式';
     s['security_auto'] = '自动';
     s['clipboard_bidirectional'] = '双向剪贴板';
+    s['resolution_settings'] = '桌面分辨率';
+    s['resolution_auto'] = '自动适配';
+    s['resolution_1920x1080'] = '1920 × 1080 (Full HD)';
+    s['resolution_2560x1440'] = '2560 × 1440 (2K)';
+    s['resolution_3840x2160'] = '3840 × 2160 (4K)';
+    s['resolution_1280x720'] = '1280 × 720 (HD)';
+    s['resolution_custom'] = '自定义';
     s['graphics_pipeline_gfx'] = 'Graphics Pipeline (GFX)';
     s['save_config'] = '保存配置';
     s['connect_desktop'] = '连接桌面';

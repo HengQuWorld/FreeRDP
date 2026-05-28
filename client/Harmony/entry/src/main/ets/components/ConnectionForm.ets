@@ -3,6 +3,19 @@ import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 import { showKeyboardForField } from '../utils/KeyboardHelper';
 
+interface ResolutionPreset {
+  label: string;
+  width: number;
+  height: number;
+}
+
+const RESOLUTION_PRESETS: ResolutionPreset[] = [
+  { label: 'resolution_1920x1080', width: 1920, height: 1080 },
+  { label: 'resolution_2560x1440', width: 2560, height: 1440 },
+  { label: 'resolution_3840x2160', width: 3840, height: 2160 },
+  { label: 'resolution_1280x720', width: 1280, height: 720 }
+];
+
 @Component
 export struct ConnectionForm {
   @Prop @Watch('onProfileChanged') profile: ConnectionProfile;
@@ -12,6 +25,7 @@ export struct ConnectionForm {
   @StorageLink('__app_language__') appLanguage: string = 'system';
   @State colors: ThemeColors = LightColors;
   @State gatewayExpanded: boolean = false;
+  @State resolutionExpanded: boolean = false;
   @State connectionName: string = '';
   @State hostAddress: string = '';
   @State portNumber: string = '3389';
@@ -34,6 +48,7 @@ export struct ConnectionForm {
   onGatewayPasswordChange: (value: string) => void = (_value: string): void => {};
   onGatewayDomainChange: (value: string) => void = (_value: string): void => {};
   onClipboardChange: (value: boolean) => void = (_value: boolean): void => {};
+  onResolutionChange: (width: number, height: number) => void = (_w: number, _h: number): void => {};
   onNew: () => void = (): void => {};
   onSave: () => void = (): void => {};
   onConnect: () => void = (): void => {};
@@ -97,6 +112,21 @@ export struct ConnectionForm {
   private hasGatewayConfig(): boolean {
     return !!(this.profile.gateway || this.profile.gatewayUsername ||
       this.profile.gatewayPassword || this.profile.gatewayDomain);
+  }
+
+  private getCurrentResolutionLabel(): string {
+    const w: number = this.profile.desktopWidth;
+    const h: number = this.profile.desktopHeight;
+    for (const preset of RESOLUTION_PRESETS) {
+      if (preset.width === w && preset.height === h) {
+        return i18n.get(this.appLanguage, preset.label);
+      }
+    }
+    return `${w} × ${h}`;
+  }
+
+  private isPresetSelected(preset: ResolutionPreset): boolean {
+    return this.profile.desktopWidth === preset.width && this.profile.desktopHeight === preset.height;
   }
 
   build() {
@@ -398,6 +428,63 @@ export struct ConnectionForm {
       }
       .width('100%')
       .padding({ left: 4, right: 4, top: 8, bottom: 8 })
+
+      Column({ space: 0 }) {
+        Row() {
+          Row({ space: 10 }) {
+            Text(this.resolutionExpanded ? '▾' : '▸')
+              .fontSize(14)
+              .fontColor(this.colors.primary);
+            Text(i18n.get(this.appLanguage, 'resolution_settings'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.colors.foreground);
+          }
+          Blank()
+          Text(this.getCurrentResolutionLabel())
+            .fontSize(14)
+            .fontColor(this.colors.primary)
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .backgroundColor(this.colors.tagBackground)
+            .borderRadius(999)
+        }
+        .width('100%')
+        .padding(16)
+        .onClick(() => { this.resolutionExpanded = !this.resolutionExpanded; });
+
+        if (this.resolutionExpanded) {
+          Column({ space: 8 }) {
+            ForEach(RESOLUTION_PRESETS, (preset: ResolutionPreset) => {
+              Row() {
+                Text(i18n.get(this.appLanguage, preset.label))
+                  .fontSize(15)
+                  .fontColor(this.isPresetSelected(preset) ? this.colors.primary : this.colors.foreground)
+                  .layoutWeight(1)
+                if (this.isPresetSelected(preset)) {
+                  Text('✓')
+                    .fontSize(16)
+                    .fontColor(this.colors.primary)
+                    .fontWeight(FontWeight.Bold)
+                }
+              }
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .borderRadius(10)
+              .backgroundColor(this.isPresetSelected(preset) ? this.colors.tagBackground : Color.Transparent)
+              .onClick(() => {
+                this.onResolutionChange(preset.width, preset.height);
+              })
+            }, (preset: ResolutionPreset, index: number) => `${preset.label}-${index}`)
+          }
+          .width('100%')
+          .padding({ top: 4, bottom: 16 })
+          .animation({ duration: 200, curve: Curve.EaseInOut })
+        }
+      }
+      .width('100%')
+      .backgroundColor(this.colors.surfaceElevated)
+      .border({ width: 1, color: this.colors.surfaceElevatedBorder })
+      .borderRadius(16)
 
       Row({ space: 14 }) {
         Button(i18n.get(this.appLanguage, 'save_config'))

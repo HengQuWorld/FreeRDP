@@ -1604,8 +1604,8 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
   WLog_INFO(TAG, "ApplySettings args=%s", allArgs.c_str());
   HiLogInfo("ApplySettings args=" + allArgs);
 
-  const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1280U;
-  const std::uint32_t desktopHeight = config_.desktopHeight > 0 ? config_.desktopHeight : 720U;
+  const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1920U;
+  const std::uint32_t desktopHeight = config_.desktopHeight > 0 ? config_.desktopHeight : 1080U;
 
   if (!freerdp_settings_set_uint32(settings, FreeRDP_DesktopWidth, desktopWidth)) {
     outError = "set FreeRDP_DesktopWidth failed";
@@ -1617,6 +1617,10 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
   }
   if (!freerdp_settings_set_bool(settings, FreeRDP_DesktopResize, TRUE)) {
     outError = "set FreeRDP_DesktopResize failed";
+    return false;
+  }
+  if (!freerdp_settings_set_bool(settings, FreeRDP_SmartSizing, TRUE)) {
+    outError = "set FreeRDP_SmartSizing failed";
     return false;
   }
   if (!freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, config_.enableGfx ? FALSE : TRUE)) {
@@ -1685,11 +1689,12 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   }
 
   // 桌面配置
-  const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1280U;
-  const std::uint32_t desktopHeight = config_.desktopHeight > 0 ? config_.desktopHeight : 720U;
+  const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1920U;
+  const std::uint32_t desktopHeight = config_.desktopHeight > 0 ? config_.desktopHeight : 1080U;
   args.emplace_back("/size:" + std::to_string(desktopWidth) + "x" +
                     std::to_string(desktopHeight));
   args.emplace_back("/bpp:32");
+  args.emplace_back("/smart-sizing");
   
   // 性能相关参数 - 根据尝试次数和模式调整
   if (config_.enableGfx && !useHighPerformanceMode_) {
@@ -1697,7 +1702,6 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   }
   args.emplace_back("/network:auto");
   args.emplace_back("-multitransport");
-  args.emplace_back("/dynamic-resolution");
   
   // 证书处理
   if (config_.ignoreCertificate) {

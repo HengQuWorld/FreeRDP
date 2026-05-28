@@ -1,6 +1,6 @@
 import dataPreferences from '@ohos.data.preferences';
 import common from '@ohos.app.ability.common';
-import { ConnectionProfile, cloneProfile, createEmptyProfile } from '../model/ConnectionProfile';
+import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
 
 export class BookmarkService {
   private static readonly PREFERENCES_NAME: string = 'freerdp_store';
@@ -131,7 +131,9 @@ export class BookmarkService {
       profile.enableAudio ? '1' : '0',
       profile.enableDrive ? '1' : '0',
       this.encode(profile.appDataDir),
-      profile.enableGfx ? '1' : '0'
+      profile.enableGfx ? '1' : '0',
+      profile.desktopWidth.toString(),
+      profile.desktopHeight.toString()
     ];
     return parts.join('|');
   }
@@ -140,17 +142,18 @@ export class BookmarkService {
     const parts: string[] = payload.split('|');
     if (parts.length !== 11 && parts.length !== 12 && parts.length !== 14 &&
         parts.length !== 15 && parts.length !== 17 && parts.length !== 18 &&
-        parts.length !== 19) {
+        parts.length !== 19 && parts.length !== 21) {
       return null;
     }
 
     const portNumber: number = Number(parts[3]);
     const hasClientHostname: boolean = parts.length === 14 || parts.length === 15 ||
-      parts.length === 17 || parts.length === 18 || parts.length === 19;
+      parts.length === 17 || parts.length === 18 || parts.length === 19 ||
+      parts.length === 21;
     const hasRememberPassword: boolean = parts.length === 12 || parts.length === 15 ||
-      parts.length === 18 || parts.length === 19;
+      parts.length === 18 || parts.length === 19 || parts.length === 21;
     const isGatewayExtendedFormat: boolean = parts.length === 17 || parts.length === 18 ||
-      parts.length === 19;
+      parts.length === 19 || parts.length === 21;
     const isExtendedFormat: boolean = parts.length === 14 || parts.length === 15 ||
       isGatewayExtendedFormat;
     const clientHostnameIndex: number = hasClientHostname ? 4 : -1;
@@ -176,6 +179,9 @@ export class BookmarkService {
       ? parts[rememberPasswordIndex] === '1'
       : this.decode(parts[passwordIndex]).length > 0;
     const password: string = rememberPassword ? this.decode(parts[passwordIndex]) : '';
+    const hasResolution: boolean = parts.length === 21;
+    const desktopWidth: number = hasResolution ? Number(parts[19]) : DEFAULT_DESKTOP_WIDTH;
+    const desktopHeight: number = hasResolution ? Number(parts[20]) : DEFAULT_DESKTOP_HEIGHT;
     return {
       id: this.decode(parts[0]),
       name: this.decode(parts[1]),
@@ -195,7 +201,9 @@ export class BookmarkService {
       enableClipboard: parts[clipboardIndex] === '1',
       enableAudio: parts[audioIndex] === '1',
       enableDrive: parts[driveIndex] === '1',
-      enableGfx: parts.length === 19 ? parts[18] === '1' : false
+      enableGfx: parts.length === 19 || parts.length === 21 ? parts[18] === '1' : false,
+      desktopWidth: Number.isFinite(desktopWidth) && desktopWidth > 0 ? desktopWidth : DEFAULT_DESKTOP_WIDTH,
+      desktopHeight: Number.isFinite(desktopHeight) && desktopHeight > 0 ? desktopHeight : DEFAULT_DESKTOP_HEIGHT
     };
   }
 }

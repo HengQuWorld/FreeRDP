@@ -18,8 +18,8 @@
 
 namespace {
 
-constexpr std::uint32_t kDefaultDesktopWidth = 1280;
-constexpr std::uint32_t kDefaultDesktopHeight = 720;
+constexpr std::uint32_t kDefaultDesktopWidth = 1920;
+constexpr std::uint32_t kDefaultDesktopHeight = 1080;
 constexpr std::size_t kMessageBufferSize = 512;
 constexpr std::uint32_t kScancodeLeftControl = 0x001D;
 constexpr std::uint32_t kScancodeLeftAlt = 0x0038;

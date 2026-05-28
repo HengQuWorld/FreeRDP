@@ -153,6 +153,14 @@ export class HomeViewModel {
     this.persistDraft();
   }
 
+  updateResolution(width: number, height: number): void {
+    const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
+    nextProfile.desktopWidth = width;
+    nextProfile.desktopHeight = height;
+    this.profile = nextProfile;
+    this.persistDraft();
+  }
+
   createNewProfile(): void {
     this.profile = createEmptyProfile(IdGenerator.next('profile'));
     this.isEditingBookmark = false;

@@ -24,12 +24,9 @@ import {
   NativeSessionInfo,
   NativeSessionSnapshot
 } from 'libfreerdp_harmony_bridge.so';
-import { ConnectionProfile, cloneProfile, createEmptyProfile } from '../model/ConnectionProfile';
+import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
 import { SessionEvent, SessionEventType, SessionSnapshot, SessionStage, SessionState } from '../model/SessionModels';
 import { i18n } from '../utils/I18n';
-
-const DEFAULT_DESKTOP_WIDTH: number = 1280;
-const DEFAULT_DESKTOP_HEIGHT: number = 720;
 
 const NATIVE_STAGE_IDLE: number = 0;
 const NATIVE_STAGE_CONNECTING: number = 1;
@@ -82,6 +79,8 @@ class NativeSessionBackendImpl implements SessionBackend {
   }
 
   private buildNativeConfig(profile: ConnectionProfile): NativeSessionConfig {
+    const width: number = profile.desktopWidth > 0 ? profile.desktopWidth : DEFAULT_DESKTOP_WIDTH;
+    const height: number = profile.desktopHeight > 0 ? profile.desktopHeight : DEFAULT_DESKTOP_HEIGHT;
     return {
       name: profile.name,
       host: profile.host,
@@ -101,8 +100,8 @@ class NativeSessionBackendImpl implements SessionBackend {
       enableDrive: profile.enableDrive,
       ignoreCertificate: true,
       enableGfx: profile.enableGfx,
-      desktopWidth: DEFAULT_DESKTOP_WIDTH,
-      desktopHeight: DEFAULT_DESKTOP_HEIGHT
+      desktopWidth: width,
+      desktopHeight: height
     };
   }
 

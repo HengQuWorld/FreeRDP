@@ -986,6 +986,7 @@ struct Index {
             onGatewayPasswordChange: (value: string) => this.homeViewModel.updateGatewayPassword(value),
             onGatewayDomainChange: (value: string) => this.homeViewModel.updateGatewayDomain(value),
             onClipboardChange: (value: boolean) => this.homeViewModel.toggleClipboard(value),
+            onResolutionChange: (width: number, height: number) => this.homeViewModel.updateResolution(width, height),
             onNew: () => { this.homeViewModel.createNewProfile(); this.selectedConnId = ''; },
             onSave: () => { 
               void (async () => {
