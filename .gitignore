@@ -4,15 +4,32 @@ build
 checker
 abi-checker
 .hvigor/outputs/build-logs/
+
+.claude/
+CLAUDE.md
+
+# Android Studio Client Build
+client/Android/Studio/.gradle/
+client/Android/Studio/.idea/
+client/Android/Studio/build/
+client/Android/Studio/local.properties
+client/Android/Studio/aFreeRDP/build/
+client/Android/Studio/freeRDPCore/build/
 client/Android/Studio/freeRDPCore/.cxx/
-client/Harmony/entry/src/main/resources/rawfile/bihu-privacy-policy.md
-.gitignore
+client/Android/Studio/freeRDPCore/src/main/cpp/external/
+client/Android/Studio/freeRDPCore/src/main/jniLibs/
+client/Android/Studio/aFreeRDP/debug.keystore
+client/Android/Studio/release.properties
+client/Android/Studio/aFreeRDP/src/main/assets/bihu-privacy-policy.md
+client/Android/Studio/aFreeRDP/src/main/assets/bihu-user-agreement.md
 
 # Harmony OHOS Client Build
 client/Harmony/local.properties
 client/Harmony/.build-signing-mode
 client/Harmony/entry/src/main/ets/utils/BuildInfo.ets
+client/Harmony/entry/src/main/resources/rawfile/bihu-privacy-policy.md
 client/Harmony/entry/src/main/resources/rawfile/bihu-user-agreement.md
+client/Harmony/native/.cache/
 client/Harmony/build/
 client/Harmony/entry/build/
 client/Harmony/entry/.cxx/
