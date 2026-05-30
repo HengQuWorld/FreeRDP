@@ -11,12 +11,21 @@ println 'Version Name: ' + androidGitVersion.name()
 println 'Version Code: ' + androidGitVersion.code()
 
 apply plugin: 'com.android.application'
+
+configurations {
+    batikRasterizer
+}
+
+def harmonyLauncherBgSvg = file('../../../Harmony/AppScope/resources/base/media/app_icon_background.svg')
+def harmonyLauncherFgSvg = file('../../../Harmony/AppScope/resources/base/media/app_icon_foreground.svg')
+def generatedLauncherResDir = layout.buildDirectory.dir('generated/res/harmonyLauncher').get().asFile
+
 android {
     compileSdkVersion = rootProject.ext.compileApi
     buildToolsVersion = rootProject.ext.toolsVersion
 
     defaultConfig {
-        applicationId "com.freerdp.afreerdp"
+        applicationId "com.hengqutiandi.rdpclient"
         minSdkVersion rootProject.ext.minApi
         targetSdkVersion rootProject.ext.targetApi
         versionName = androidGitVersion.name()
@@ -43,8 +52,75 @@ android {
             jniDebuggable true
         }
     }
+
+    sourceSets {
+        main {
+            res.srcDir generatedLauncherResDir
+        }
+    }
 }
 
 dependencies {
     implementation project(':freeRDPCore')
+    batikRasterizer 'org.apache.xmlgraphics:batik-rasterizer:1.17'
+}
+
+task generateLauncherIconsFromHarmonySvg {
+    inputs.file harmonyLauncherBgSvg
+    inputs.file harmonyLauncherFgSvg
+    outputs.dir generatedLauncherResDir
+    
+    doLast {
+        def outputRoot = generatedLauncherResDir
+        def sanitizedSvg = layout.buildDirectory.file('intermediates/harmonyLauncher/app_icon_sanitized.svg').get().asFile
+        
+        delete(outputRoot)
+        delete(sanitizedSvg)
+        outputRoot.mkdirs()
+        sanitizedSvg.parentFile.mkdirs()
+        
+        def bgContent = harmonyLauncherBgSvg.text
+        def fgContent = harmonyLauncherFgSvg.text
+        
+        def bgDefs = bgContent.substring(bgContent.indexOf('<defs>') + 6, bgContent.indexOf('</defs>'))
+        def mergedSvg = fgContent.replace('<defs>', '<defs>\n' + bgDefs)
+        mergedSvg = mergedSvg.replace('</defs>', '</defs>\n  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bg)" />')
+        mergedSvg = mergedSvg.replace('fill="rgba(255,255,255,0.04)"', 'fill="#FFFFFF" fill-opacity="0.04"')
+        mergedSvg = mergedSvg.replaceFirst('width="1024" height="1024"', 'width="144" height="144"')
+        
+        sanitizedSvg.text = mergedSvg
+        
+        def densities = [
+            ['mipmap-mdpi', 48],
+            ['mipmap-hdpi', 72],
+            ['mipmap-xhdpi', 96],
+            ['mipmap-xxhdpi', 144],
+            ['mipmap-xxxhdpi', 192]
+        ]
+        
+        densities.each { density ->
+            def folderName = density[0]
+            def sizePx = density[1]
+            def targetDir = new File(outputRoot, folderName)
+            targetDir.mkdirs()
+            
+            def targetFiles = ['ic_launcher.png', 'ic_launcher_round.png']
+            targetFiles.each { fileName ->
+                javaexec {
+                    classpath = configurations.batikRasterizer
+                    mainClass.set('org.apache.batik.apps.rasterizer.Main')
+                    jvmArgs '-Djava.awt.headless=true'
+                    args '-m', 'image/png',
+                         '-w', sizePx.toString(),
+                         '-h', sizePx.toString(),
+                         '-d', new File(targetDir, fileName).absolutePath,
+                         sanitizedSvg.absolutePath
+                }
+            }
+        }
+    }
+}
+
+tasks.named('preBuild').configure {
+    dependsOn generateLauncherIconsFromHarmonySvg
 }
