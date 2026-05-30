@@ -139,7 +139,7 @@
     <!-- Activity titles -->
     <string name="title_bookmark_settings">连接设置</string>
     <string name="title_application_settings">设置</string>
-    <string name="title_home">aFreeRDP - FreeRDP for Android</string>
+    <string name="title_home">碧虎远程桌面</string>
     <string name="title_create_shortcut">RDP 连接</string>
     <string name="title_help">帮助</string>
     <string name="title_about">关于</string>
@@ -159,7 +159,7 @@
     <string name="dlg_msg_create_shortcut">快捷方式名：</string>
     <string name="dlg_msg_connecting">正在连接 &#8230;</string>
     <string name="dlg_msg_logging_in">正在登录 &#8230;</string>
-    <string name="dlg_title_about">关于 aFreeRDP</string>
+    <string name="dlg_title_about">关于碧虎远程桌面</string>
     <string name="dlg_title_create_bookmark_after_qc">保存连接设置吗？</string>
     <string name="dlg_msg_create_bookmark_after_qc">你是否想保存未保存的连接设置？</string>
     <string name="dlg_title_save_bookmark">保存连接吗？</string>

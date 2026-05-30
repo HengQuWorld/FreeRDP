@@ -135,7 +135,7 @@
     <!-- Activity titles -->
     <string name="title_bookmark_settings">Tilkoblingsinnstillinger</string>
     <string name="title_application_settings">Innstillinger</string>
-    <string name="title_home">aFreeRDP - FreeRDP for Android</string>
+    <string name="title_home">GreenTiger RDP Client</string>
     <string name="title_create_shortcut">RDP-tilkoblinger</string>
     <string name="title_help">Hjelp</string>
     <string name="title_about">Om</string>
@@ -155,7 +155,7 @@
     <string name="dlg_msg_create_shortcut">Snarveisnavn:</string>
     <string name="dlg_msg_connecting">Kobler til &#8230;</string>
     <string name="dlg_msg_logging_in">Logger inn &#8230;</string>
-    <string name="dlg_title_about">Om aFreeRDP</string>
+    <string name="dlg_title_about">Om GreenTiger RDP Client</string>
     <string name="dlg_title_create_bookmark_after_qc">Lagre tilkoblingsinnstillinger?</string>
     <string name="dlg_msg_create_bookmark_after_qc">Ønsker du å lagre de ulagrede tilkoblingsinnstillingene?</string>
     <string name="dlg_title_save_bookmark">Lagre tilkobling?</string>

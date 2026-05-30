@@ -135,7 +135,7 @@
     <!-- Activity titles -->
     <string name="title_bookmark_settings">Connectie instellingen</string>
     <string name="title_application_settings">Instellingen</string>
-    <string name="title_home">aFreeRDP - FreeRDP voor Android</string>
+    <string name="title_home">GreenTiger RDP Client</string>
     <string name="title_create_shortcut">RDP verbinding</string>
     <string name="title_help">Help</string>
     <string name="title_about">Over</string>
@@ -155,7 +155,7 @@
     <string name="dlg_msg_create_shortcut">Snelkoppeling naam:</string>
     <string name="dlg_msg_connecting">Verbinden ...</string>
     <string name="dlg_msg_logging_in">Aanmelden ...</string>
-    <string name="dlg_title_about">Over aFreeRDP</string>
+    <string name="dlg_title_about">Over GreenTiger RDP Client</string>
     <string name="dlg_title_create_bookmark_after_qc">Connectie instellingen opslaan?</string>
     <string name="dlg_msg_create_bookmark_after_qc">Uw connectie instellingen zijn niet opgeslagen! Wilt u deze opslaan?</string>
     <string name="dlg_title_save_bookmark">Verbinding opslaan?</string>

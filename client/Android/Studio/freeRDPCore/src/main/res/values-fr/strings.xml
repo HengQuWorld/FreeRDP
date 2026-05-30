@@ -134,7 +134,7 @@
     <!-- Activity titles -->
     <string name="title_bookmark_settings">"Paramètres de connexion"</string>
     <string name="title_application_settings">"Paramètres"</string>
-    <string name="title_home">"aFreeRDP - FreeRDP pour Android"</string>
+    <string name="title_home">"GreenTiger RDP Client"</string>
     <string name="title_create_shortcut">"Connexions RDP"</string>
     <string name="title_help">"Aide"</string>
     <string name="title_about">"À propos"</string>
@@ -154,7 +154,7 @@
     <string name="dlg_msg_create_shortcut">"Nom du raccourci:"</string>
     <string name="dlg_msg_connecting">"Connexion..."</string>
     <string name="dlg_msg_logging_in">"Connexion..."</string>
-    <string name="dlg_title_about">"À propos de aFreeRDP"</string>
+    <string name="dlg_title_about">"À propos de GreenTiger RDP Client"</string>
     <string name="dlg_title_create_bookmark_after_qc">"Enregistrer les paramètres de connexion?"</string>
     <string name="dlg_msg_create_bookmark_after_qc">"Vos paramètres de connexion n'ont pas été sauvegardés! Voulez-vous les enregistrer?"</string>
     <string name="dlg_title_save_bookmark">"Enregistrer la connexion?"</string>

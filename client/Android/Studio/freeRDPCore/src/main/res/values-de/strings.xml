@@ -134,7 +134,7 @@
     <!-- Activity titles -->
     <string name="title_bookmark_settings">Verbindungseinstellungen</string>
     <string name="title_application_settings">Einstellungen</string>
-    <string name="title_home">aFreeRDP - FreeRDP für Android</string>
+    <string name="title_home">GreenTiger RDP Client</string>
     <string name="title_create_shortcut">RDP Verbindungen</string>
     <string name="title_help">Hilfe</string>
     <string name="title_about">Impressum</string>
@@ -154,7 +154,7 @@
     <string name="dlg_msg_create_shortcut">Verknüpfungsname:</string>
     <string name="dlg_msg_connecting">Verbinden &#8230;</string>
     <string name="dlg_msg_logging_in">Einloggen &#8230;</string>
-    <string name="dlg_title_about">Über aFreeRDP</string>
+    <string name="dlg_title_about">Über GreenTiger RDP Client</string>
     <string name="dlg_title_create_bookmark_after_qc">Verbindungseinstellungen speichern?</string>
     <string name="dlg_msg_create_bookmark_after_qc">Die Verbindungseinstellungen wurden nicht gespeichert! Jetzt speichern?</string>
     <string name="dlg_title_save_bookmark">Verbindung speichern?</string>

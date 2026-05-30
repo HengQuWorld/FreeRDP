@@ -9,7 +9,7 @@
     <string name="logout">ログアウト</string>
     <!-- Home menu items -->
     <string name="menu_exit">終了</string>
-    <string name="menu_about">aFreeRDPについて</string>
+    <string name="menu_about">碧虎远程桌面について</string>
     <string name="menu_help">ヘルプ</string>
     <string name="menu_new_bookmark">新しい接続</string>
     <string name="menu_app_settings">設定</string>
@@ -137,10 +137,10 @@
     <!-- Activity titles -->
     <string name="title_bookmark_settings">接続設定</string>
     <string name="title_application_settings">設定</string>
-    <string name="title_home">aFreeRDP - FreeRDP for Android</string>
+    <string name="title_home">GreenTiger RDP Client</string>
     <string name="title_create_shortcut">RDP Connections</string>
     <string name="title_help">ヘルプ</string>
-    <string name="title_about">aFreeRDPについて</string>
+    <string name="title_about">碧虎远程桌面について</string>
     <!-- Error message strings -->
     <string name="error_bookmark_incomplete_title">保存せずに戻りますか?</string>
     <string name="error_bookmark_incomplete">保存せずに終了する場合は「キャンセル」を押してください。\n続行する場合は「続行」を押して、必要な項目を入力してください。</string>
@@ -157,7 +157,7 @@
     <string name="dlg_msg_create_shortcut">ショートカットの名前:</string>
     <string name="dlg_msg_connecting">接続中 &#8230;</string>
     <string name="dlg_msg_logging_in">ログイン中 &#8230;</string>
-    <string name="dlg_title_about">aFreeRDPについて</string>
+    <string name="dlg_title_about">GreenTiger RDP Clientについて</string>
     <string name="dlg_title_create_bookmark_after_qc">接続設定を保存しますか？</string>
     <string name="dlg_msg_create_bookmark_after_qc">接続設定は保存されていません。保存しますか？</string>
     <string name="dlg_title_save_bookmark">接続設定を保存しますか？</string>
