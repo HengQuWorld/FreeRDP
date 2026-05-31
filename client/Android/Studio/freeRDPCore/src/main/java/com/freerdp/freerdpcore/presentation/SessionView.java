@@ -19,6 +19,8 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.BitmapDrawable;
 import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.text.InputType;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -385,16 +387,30 @@ public class SessionView extends View
 		{
 			MotionEvent mappedEvent = mapTouchEvent(e);
 			sessionViewListener.onSessionViewBeginTouch();
-			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-			                                           (int)mappedEvent.getY(), true);
+			sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
+			                                            (int)mappedEvent.getY(), true);
 			longPressInProgress = true;
+			try
+			{
+				Vibrator vibrator = (Vibrator)getContext().getSystemService(Context.VIBRATOR_SERVICE);
+				if (vibrator != null)
+				{
+					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+						vibrator.vibrate(VibrationEffect.createOneShot(30L, VibrationEffect.DEFAULT_AMPLITUDE));
+					else
+						vibrator.vibrate(30L);
+				}
+			}
+			catch (SecurityException ignored)
+			{
+			}
 		}
 
 		public void onLongPressUp(MotionEvent e)
 		{
 			MotionEvent mappedEvent = mapTouchEvent(e);
-			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-			                                           (int)mappedEvent.getY(), false);
+			sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
+			                                            (int)mappedEvent.getY(), false);
 			longPressInProgress = false;
 			sessionViewListener.onSessionViewEndTouch();
 		}
