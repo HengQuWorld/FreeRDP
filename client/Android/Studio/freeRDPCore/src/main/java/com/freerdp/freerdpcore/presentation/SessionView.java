@@ -92,6 +92,7 @@ public class SessionView extends View
 
 		invalidRegions = new Stack<>();
 		gestureDetector = new GestureDetector(context, new SessionGestureListener(), null, true);
+		gestureDetector.setLongPressTimeout(500);
 		doubleGestureDetector =
 		    new DoubleGestureDetector(context, null, new SessionDoubleGestureListener());
 
@@ -371,20 +372,32 @@ public class SessionView extends View
 	private class SessionGestureListener extends GestureDetector.SimpleOnGestureListener
 	{
 		boolean longPressInProgress = false;
+		boolean dragInProgress = false;
 
 		public boolean onDown(MotionEvent e)
 		{
+			dragInProgress = false;
 			return true;
 		}
 
 		public boolean onUp(MotionEvent e)
 		{
+			if (dragInProgress)
+			{
+				MotionEvent mappedEvent = mapTouchEvent(e);
+				sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
+				                                           (int)mappedEvent.getY(), false);
+				dragInProgress = false;
+			}
 			sessionViewListener.onSessionViewEndTouch();
 			return true;
 		}
 
 		public void onLongPress(MotionEvent e)
 		{
+			if (dragInProgress)
+				return;
+
 			MotionEvent mappedEvent = mapTouchEvent(e);
 			sessionViewListener.onSessionViewBeginTouch();
 			sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
@@ -418,14 +431,20 @@ public class SessionView extends View
 		public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY)
 		{
 			if (longPressInProgress)
-			{
-				MotionEvent mappedEvent = mapTouchEvent(e2);
-				sessionViewListener.onSessionViewMove((int)mappedEvent.getX(),
-				                                      (int)mappedEvent.getY());
 				return true;
-			}
 
-			return false;
+			MotionEvent mappedEvent = mapTouchEvent(e2);
+			if (!dragInProgress)
+			{
+				dragInProgress = true;
+				sessionViewListener.onSessionViewBeginTouch();
+				MotionEvent mappedDown = mapTouchEvent(e1);
+				sessionViewListener.onSessionViewLeftTouch((int)mappedDown.getX(),
+				                                           (int)mappedDown.getY(), true);
+			}
+			sessionViewListener.onSessionViewMove((int)mappedEvent.getX(),
+			                                      (int)mappedEvent.getY());
+			return true;
 		}
 
 		public boolean onDoubleTap(MotionEvent e)
