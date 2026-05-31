@@ -29,6 +29,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
+import android.view.ViewParent;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -63,6 +64,15 @@ public class SessionView extends View
 	private RectF invalidRegionF;
 	private GestureDetector gestureDetector;
 	private SessionState currentSession;
+	private boolean longPressInProgress = false;
+	private boolean touchDragging = false;
+	private boolean panning = false;
+	private float touchDownX;
+	private float touchDownY;
+	private float lastPanX;
+	private float lastPanY;
+	private static final int TOUCH_DRAG_THRESHOLD = 12;
+	private static final float PAN_SCALE = 1.5f;
 
 	// private static final String TAG = "FreeRDP.SessionView";
 	private DoubleGestureDetector doubleGestureDetector;
@@ -261,6 +271,13 @@ public class SessionView extends View
 		return mappedEvent;
 	}
 
+	private MotionEvent mapTouchEvent(float x, float y)
+	{
+		float[] coordinates = { x, y };
+		invScaleMatrix.mapPoints(coordinates);
+		return MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, coordinates[0], coordinates[1], 0);
+	}
+
 	// perform mapping on the double touch event's coordinates according to the current scaling
 	private MotionEvent mapDoubleTouchEvent(MotionEvent event)
 	{
@@ -274,9 +291,6 @@ public class SessionView extends View
 
 	@Override public boolean onTouchEvent(MotionEvent event)
 	{
-		// Physical mouse events: bypass gesture detector entirely.
-		// Buttons are handled in onGenericMotionEvent; hover moves in onHoverEvent.
-		// Only ACTION_MOVE with a button held (drag) needs handling here.
 		if (event.isFromSource(InputDevice.SOURCE_MOUSE))
 		{
 			int action = event.getActionMasked();
@@ -290,9 +304,104 @@ public class SessionView extends View
 			return true;
 		}
 
-		boolean res = gestureDetector.onTouchEvent(event);
-		res |= doubleGestureDetector.onTouchEvent(event);
-		return res;
+		gestureDetector.onTouchEvent(event);
+		doubleGestureDetector.onTouchEvent(event);
+
+		int action = event.getActionMasked();
+
+		if (action == MotionEvent.ACTION_DOWN)
+		{
+			sessionViewListener.onSessionViewBeginTouch();
+			touchDownX = event.getX();
+			touchDownY = event.getY();
+			lastPanX = event.getRawX();
+			lastPanY = event.getRawY();
+			panning = false;
+			touchDragging = false;
+			return true;
+		}
+		else if (action == MotionEvent.ACTION_MOVE)
+		{
+			if (event.getPointerCount() > 1)
+			{
+				longPressInProgress = false;
+				panning = false;
+				return true;
+			}
+
+			if (longPressInProgress)
+			{
+				if (!touchDragging)
+				{
+					float dx = event.getX() - touchDownX;
+					float dy = event.getY() - touchDownY;
+					if (Math.abs(dx) + Math.abs(dy) > TOUCH_DRAG_THRESHOLD)
+					{
+						touchDragging = true;
+						MotionEvent mappedDown = mapTouchEvent(touchDownX, touchDownY);
+						sessionViewListener.onSessionViewLeftTouch((int)mappedDown.getX(),
+						                                           (int)mappedDown.getY(), true);
+						mappedDown.recycle();
+					}
+				}
+				if (touchDragging)
+				{
+					MotionEvent mapped = mapTouchEvent(event);
+					sessionViewListener.onSessionViewMove((int)mapped.getX(),
+					                                      (int)mapped.getY());
+					mapped.recycle();
+				}
+			}
+			else
+			{
+				float dx = event.getX() - touchDownX;
+				float dy = event.getY() - touchDownY;
+				if (!panning && Math.abs(dx) + Math.abs(dy) > TOUCH_DRAG_THRESHOLD)
+				{
+					panning = true;
+					lastPanX = event.getRawX();
+					lastPanY = event.getRawY();
+				}
+				if (panning)
+				{
+					float panDx = (lastPanX - event.getRawX()) * PAN_SCALE;
+					float panDy = (lastPanY - event.getRawY()) * PAN_SCALE;
+					lastPanX = event.getRawX();
+					lastPanY = event.getRawY();
+					ViewParent parent = getParent();
+					if (parent instanceof ScrollView2D)
+						((ScrollView2D)parent).scrollBy((int)panDx, (int)panDy);
+				}
+			}
+			return true;
+		}
+		else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL)
+		{
+			if (touchDragging)
+			{
+				MotionEvent mapped = mapTouchEvent(event);
+				sessionViewListener.onSessionViewLeftTouch((int)mapped.getX(),
+				                                           (int)mapped.getY(), false);
+				mapped.recycle();
+			}
+			else if (longPressInProgress && !panning && action == MotionEvent.ACTION_UP)
+			{
+				MotionEvent mapped = mapTouchEvent(event);
+				sessionViewListener.onSessionViewRightTouch((int)mapped.getX(),
+				                                            (int)mapped.getY(), true);
+				sessionViewListener.onSessionViewRightTouch((int)mapped.getX(),
+				                                            (int)mapped.getY(), false);
+				mapped.recycle();
+			}
+
+			longPressInProgress = false;
+			touchDragging = false;
+			panning = false;
+			sessionViewListener.onSessionViewEndTouch();
+			return true;
+		}
+
+		return true;
 	}
 
 	// Handle all physical mouse buttons here; finger taps come via onSingleTapUp.
@@ -325,6 +434,8 @@ public class SessionView extends View
 					if (down)
 						sessionViewListener.onSessionViewBeginTouch();
 					sessionViewListener.onSessionViewRightTouch(x, y, down);
+					if (!down)
+						sessionViewListener.onSessionViewEndTouch();
 					return true;
 				case MotionEvent.BUTTON_TERTIARY:
 					sessionViewListener.onSessionViewMiddleTouch(x, y, down);
@@ -371,37 +482,18 @@ public class SessionView extends View
 
 	private class SessionGestureListener extends GestureDetector.SimpleOnGestureListener
 	{
-		boolean longPressInProgress = false;
-		boolean dragInProgress = false;
-
 		public boolean onDown(MotionEvent e)
 		{
-			dragInProgress = false;
 			return true;
 		}
 
 		public boolean onUp(MotionEvent e)
 		{
-			if (dragInProgress)
-			{
-				MotionEvent mappedEvent = mapTouchEvent(e);
-				sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
-				                                           (int)mappedEvent.getY(), false);
-				dragInProgress = false;
-			}
-			sessionViewListener.onSessionViewEndTouch();
 			return true;
 		}
 
 		public void onLongPress(MotionEvent e)
 		{
-			if (dragInProgress)
-				return;
-
-			MotionEvent mappedEvent = mapTouchEvent(e);
-			sessionViewListener.onSessionViewBeginTouch();
-			sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
-			                                            (int)mappedEvent.getY(), true);
 			longPressInProgress = true;
 			try
 			{
@@ -421,58 +513,35 @@ public class SessionView extends View
 
 		public void onLongPressUp(MotionEvent e)
 		{
-			MotionEvent mappedEvent = mapTouchEvent(e);
-			sessionViewListener.onSessionViewRightTouch((int)mappedEvent.getX(),
-			                                            (int)mappedEvent.getY(), false);
-			longPressInProgress = false;
-			sessionViewListener.onSessionViewEndTouch();
 		}
 
 		public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY)
 		{
-			if (longPressInProgress)
-				return true;
-
-			MotionEvent mappedEvent = mapTouchEvent(e2);
-			if (!dragInProgress)
-			{
-				dragInProgress = true;
-				sessionViewListener.onSessionViewBeginTouch();
-				MotionEvent mappedDown = mapTouchEvent(e1);
-				sessionViewListener.onSessionViewLeftTouch((int)mappedDown.getX(),
-				                                           (int)mappedDown.getY(), true);
-			}
-			sessionViewListener.onSessionViewMove((int)mappedEvent.getX(),
-			                                      (int)mappedEvent.getY());
-			return true;
+			return false;
 		}
 
 		public boolean onDoubleTap(MotionEvent e)
 		{
-			// send 2nd click for double click
 			MotionEvent mappedEvent = mapTouchEvent(e);
 			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
 			                                           (int)mappedEvent.getY(), true);
 			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
 			                                           (int)mappedEvent.getY(), false);
+			mappedEvent.recycle();
 			return true;
 		}
 
 		public boolean onSingleTapUp(MotionEvent e)
 		{
-			// Physical mouse buttons are handled via ACTION_BUTTON_PRESS in onGenericMotionEvent.
-			// If buttonState is non-zero this event came from a physical mouse button
 			if (e.getButtonState() != 0)
 				return false;
 
-			// Finger touch -> left click
 			MotionEvent mappedEvent = mapTouchEvent(e);
-			sessionViewListener.onSessionViewBeginTouch();
 			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
 			                                           (int)mappedEvent.getY(), true);
 			sessionViewListener.onSessionViewLeftTouch((int)mappedEvent.getX(),
 			                                           (int)mappedEvent.getY(), false);
-			sessionViewListener.onSessionViewEndTouch();
+			mappedEvent.recycle();
 			return true;
 		}
 	}

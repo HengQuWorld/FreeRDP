@@ -21,7 +21,7 @@ public class DoubleGestureDetector
 {
 	// timeout during that the second finger has to touch the screen before the double finger
 	// detection is cancelled
-	private static final long DOUBLE_TOUCH_TIMEOUT = 100;
+	private static final long DOUBLE_TOUCH_TIMEOUT = 300;
 	// timeout during that an UP event will trigger a single double touch event
 	private static final long SINGLE_DOUBLE_TOUCH_TIMEOUT = 1000;
 	// constants for Message.what used by GestureHandler below
