@@ -3,10 +3,18 @@
 
     <style name="Theme.Settings" parent="@style/Theme.AppCompat.Light.DarkActionBar">
         <item name="android:windowLightStatusBar">true</item>
+        <item name="colorPrimary">@color/tiger_primary</item>
+        <item name="colorPrimaryDark">@color/tiger_primary</item>
+        <item name="colorAccent">@color/tiger_primary</item>
+        <item name="android:windowBackground">@color/tiger_surface</item>
     </style>
 
     <style name="Theme.Main" parent="@style/Theme.AppCompat.Light.DarkActionBar">
         <item name="android:windowLightStatusBar">true</item>
+        <item name="colorPrimary">@color/tiger_primary</item>
+        <item name="colorPrimaryDark">@color/tiger_primary</item>
+        <item name="colorAccent">@color/tiger_primary</item>
+        <item name="android:windowBackground">@color/tiger_surface</item>
     </style>
     
 </resources>

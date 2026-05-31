@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="separator_frame_color">#9AB6CD</color>
-    <color name="separator_background_color">#C2D6E6</color>
-    <color name="separator_text_color">#164E76</color>
+    <color name="separator_frame_color">#D2E7E7</color>
+    <color name="separator_background_color">#D2E7E7</color>
+    <color name="separator_text_color">#2C4F54</color>
     <color name="button_text_color">@android:color/black</color>
+    <color name="tiger_primary">#2C4F54</color>
+    <color name="tiger_on_primary">#FFFFFF</color>
+    <color name="tiger_primary_container">#D2E7E7</color>
+    <color name="tiger_surface">#FDFBF7</color>
+    <color name="tiger_surface_alt">#FFFFFF</color>
+    <color name="tiger_on_surface">#1C1917</color>
+    <color name="tiger_outline">#E7E5E4</color>
+    <color name="tiger_secondary">#57534E</color>
+    <color name="tiger_error">#B42318</color>
+    <color name="tiger_text_primary">#1C1917</color>
+    <color name="tiger_text_muted">#292524</color>
+    <color name="tiger_text_secondary">#57534E</color>
+    <color name="tiger_text_tertiary">#78716C</color>
+    <color name="tiger_primary_soft">#1F2C4F54</color>
+    <color name="tiger_primary_pressed">#E02C4F54</color>
 
     <declare-styleable name="IntEditTextPreference">
         <attr name="bounds_min" format="integer" />
