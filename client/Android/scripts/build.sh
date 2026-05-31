@@ -82,9 +82,23 @@ detect_native_changes() {
   changes="$(
     {
       git -C "${repo_root}" diff --name-only HEAD -- \
-        client/Android/Studio/freeRDPCore/src/main/cpp 2>/dev/null || true
+        libfreerdp \
+        winpr \
+        include \
+        cmake \
+        client/Android/Studio/freeRDPCore/src/main/cpp \
+        CMakeLists.txt \
+        client/CMakeLists.txt \
+        client/Android/Studio/freeRDPCore/src/main/cpp/CMakeLists.txt 2>/dev/null || true
       git -C "${repo_root}" ls-files --others --exclude-standard -- \
-        client/Android/Studio/freeRDPCore/src/main/cpp 2>/dev/null || true
+        libfreerdp \
+        winpr \
+        include \
+        cmake \
+        client/Android/Studio/freeRDPCore/src/main/cpp \
+        CMakeLists.txt \
+        client/CMakeLists.txt \
+        client/Android/Studio/freeRDPCore/src/main/cpp/CMakeLists.txt 2>/dev/null || true
     } | awk 'NF && !seen[$0]++'
   )"
 
@@ -152,6 +166,7 @@ build() {
   local mode="$1"
   local force_clean="${2:-false}"
   local abi="${3:-}"
+  local skip_native="${4:-auto}"
 
   local gradlew
   gradlew="$(resolve_gradlew)"
@@ -165,15 +180,29 @@ build() {
 
   if [[ "${force_clean}" == "true" ]]; then
     clean_full
-  else
-    local native_changes
-    native_changes="$(detect_native_changes)"
+  fi
 
+  local native_changes
+  native_changes="$(detect_native_changes)"
+
+  if [[ "${skip_native}" == "auto" ]]; then
+    local native_cache="${PROJECT_DIR}/freeRDPCore/.native-libs-cache"
     if [[ -n "${native_changes}" ]]; then
-      log "Native/CMake changes detected:"
-      printf '%s\n' "${native_changes}"
-      clean_cmake_cache
+      skip_native="false"
+      log "Auto-detect: native code changed, full build required"
+      printf '  %s\n' "${native_changes}"
+    elif [[ ! -d "${native_cache}" ]] || [[ -z "$(ls -A "${native_cache}" 2>/dev/null)" ]]; then
+      skip_native="false"
+      log "Auto-detect: no cached native libs found, full build required"
+    else
+      skip_native="true"
+      log "Auto-detect: no native code changes, skipping CMake build"
     fi
+  fi
+
+  if [[ "${skip_native}" == "false" && "${force_clean}" != "true" && -n "${native_changes}" ]]; then
+    log "Native/CMake changes detected, cleaning CMake cache"
+    clean_cmake_cache
   fi
 
   local gradle_task
@@ -193,6 +222,11 @@ build() {
   if [[ -n "${abi}" ]]; then
     log "Filtering ABI: ${abi}"
     gradle_args+=("-Pandroid.buildOnlyPreDexedDexes=true")
+  fi
+
+  if [[ "${skip_native}" == "true" ]]; then
+    gradle_args+=("-PskipNativeBuild")
+    log "Skipping native CMake build (using cached .so files)"
   fi
 
   log "Building Android application package (${mode})"
@@ -224,7 +258,14 @@ print_usage() {
   printf 'Options:\n'
   printf '  --clean        Force full clean before build\n'
   printf '  --clean-cmake  Clean only CMake cache (preserve prebuilt libs)\n'
+  printf '  --skip-native  Skip native CMake build (requires prior full build)\n'
+  printf '  --full         Force full build including native code\n'
   printf '  -h, --help     Show this help message\n'
+  printf '\n'
+  printf 'Auto-detection (default):\n'
+  printf '  If neither --skip-native nor --full is specified, the script\n'
+  printf '  automatically detects native code changes and skips CMake when\n'
+  printf '  only frontend (Java) code has been modified.\n'
   printf '\n'
   printf 'Environment variables:\n'
   printf '  ANDROID_HOME             Android SDK path\n'
@@ -235,6 +276,7 @@ main() {
   local build_mode="debug"
   local force_clean="false"
   local do_clean_cmake="false"
+  local skip_native="auto"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -254,6 +296,14 @@ main() {
         do_clean_cmake="true"
         shift
         ;;
+      --skip-native|fast)
+        skip_native="true"
+        shift
+        ;;
+      --full)
+        skip_native="false"
+        shift
+        ;;
       --help|-h)
         print_usage
         exit 0
@@ -270,7 +320,7 @@ main() {
     exit 0
   fi
 
-  build "${build_mode}" "${force_clean}"
+  build "${build_mode}" "${force_clean}" "" "${skip_native}"
   log "Build completed successfully (${build_mode})"
 }
 

@@ -16,6 +16,7 @@ client/Android/Studio/local.properties
 client/Android/Studio/aFreeRDP/build/
 client/Android/Studio/freeRDPCore/build/
 client/Android/Studio/freeRDPCore/.cxx/
+client/Android/Studio/freeRDPCore/.native-libs-cache/
 client/Android/Studio/freeRDPCore/src/main/cpp/external/
 client/Android/Studio/freeRDPCore/src/main/jniLibs/
 client/Android/Studio/aFreeRDP/debug.keystore

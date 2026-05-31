@@ -1,5 +1,8 @@
 apply plugin: 'com.android.library'
 
+def skipNativeBuild = project.hasProperty('skipNativeBuild')
+def nativeLibsCacheDir = file('.native-libs-cache')
+
 android {
     compileSdkVersion = rootProject.ext.compileApi
     buildToolsVersion = rootProject.ext.toolsVersion
@@ -15,9 +18,11 @@ android {
         targetSdkVersion rootProject.ext.targetApi
 	ndkVersion = "29.0.13113456"
 
-        ndk {
-            //noinspection ChromeOsAbiSupport
-            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+        if (!skipNativeBuild) {
+            ndk {
+                //noinspection ChromeOsAbiSupport
+                abiFilters "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+            }
         }
     }
 
@@ -25,40 +30,46 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
-            externalNativeBuild {
-                cmake {
-                    arguments "-DWITH_FFMPEG=ON", "-DWITH_OPENH264=ON",
-                              "-DWITH_OPUS=ON",   "-DWITH_WEBP=ON", 
-                              "-DWITH_JPEG=ON",   "-DWITH_PNG=ON", 
-                              "-DWITH_CJSON=ON",  "-DWITH_OPENSSL=ON"
+            if (!skipNativeBuild) {
+                externalNativeBuild {
+                    cmake {
+                        arguments "-DWITH_FFMPEG=ON", "-DWITH_OPENH264=ON",
+                                  "-DWITH_OPUS=ON",   "-DWITH_WEBP=ON", 
+                                  "-DWITH_JPEG=ON",   "-DWITH_PNG=ON", 
+                                  "-DWITH_CJSON=ON",  "-DWITH_OPENSSL=ON"
 
-                    abiFilters "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+                        abiFilters "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+                    }
                 }
             }
         }
         debug {
             jniDebuggable true
-            externalNativeBuild {
-                cmake {
-                    arguments "-DWITH_FFMPEG=OFF", "-DWITH_OPENH264=OFF",
-                              "-DWITH_OPUS=OFF",   "-DWITH_WEBP=OFF", 
-                              "-DWITH_JPEG=OFF",   "-DWITH_PNG=OFF", 
-                              "-DWITH_CJSON=OFF",  "-DWITH_OPENSSL=ON"
+            if (!skipNativeBuild) {
+                externalNativeBuild {
+                    cmake {
+                        arguments "-DWITH_FFMPEG=OFF", "-DWITH_OPENH264=OFF",
+                                  "-DWITH_OPUS=OFF",   "-DWITH_WEBP=OFF", 
+                                  "-DWITH_JPEG=OFF",   "-DWITH_PNG=OFF", 
+                                  "-DWITH_CJSON=OFF",  "-DWITH_OPENSSL=ON"
 
-                    abiFilters "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+                        abiFilters "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+                    }
                 }
             }
         }
         qa {
             jniDebuggable false
-            externalNativeBuild {
-                cmake {
-                    arguments "-DWITH_FFMPEG=ON", "-DWITH_OPENH264=ON",
-                              "-DWITH_OPUS=ON",   "-DWITH_WEBP=ON",
-                              "-DWITH_JPEG=ON",   "-DWITH_PNG=ON",
-                              "-DWITH_CJSON=ON",  "-DWITH_OPENSSL=ON"
+            if (!skipNativeBuild) {
+                externalNativeBuild {
+                    cmake {
+                        arguments "-DWITH_FFMPEG=ON", "-DWITH_OPENH264=ON",
+                                  "-DWITH_OPUS=ON",   "-DWITH_WEBP=ON",
+                                  "-DWITH_JPEG=ON",   "-DWITH_PNG=ON",
+                                  "-DWITH_CJSON=ON",  "-DWITH_OPENSSL=ON"
 
-                    abiFilters "arm64-v8a"
+                        abiFilters "arm64-v8a"
+                    }
                 }
             }
         }
@@ -70,9 +81,18 @@ android {
     buildFeatures {
         viewBinding true
     }
-    externalNativeBuild {
-        cmake {
-            path file('src/main/cpp/CMakeLists.txt')
+    if (!skipNativeBuild) {
+        externalNativeBuild {
+            cmake {
+                path file('src/main/cpp/CMakeLists.txt')
+            }
+        }
+    }
+    if (skipNativeBuild) {
+        sourceSets {
+            main {
+                jniLibs.srcDirs 'src/main/jniLibs', nativeLibsCacheDir.absolutePath
+            }
         }
     }
 }
@@ -90,4 +110,63 @@ dependencies {
 
     implementation 'net.zetetic:sqlcipher-android:4.15.0@aar'
     implementation 'androidx.sqlite:sqlite:2.6.2'
+}
+
+task cacheNativeLibs {
+    outputs.dir nativeLibsCacheDir
+    doLast {
+        def intermediatesDir = file("${buildDir}/intermediates")
+        def searchDirs = []
+        if (file("${intermediatesDir}/cmake").exists()) {
+            searchDirs << file("${intermediatesDir}/cmake")
+        }
+        if (file("${intermediatesDir}/cxx").exists()) {
+            file("${intermediatesDir}/cxx").eachDir { variantDir ->
+                variantDir.eachDir { hashDir ->
+                    searchDirs << hashDir
+                }
+            }
+        }
+        if (searchDirs.isEmpty()) {
+            logger.lifecycle('[cacheNativeLibs] No CMake/CXX output directory found, skipping cache')
+            return
+        }
+        def abis = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
+        def jniLibsDir = file('src/main/jniLibs')
+        abis.each { abi ->
+            def destDir = file("${nativeLibsCacheDir}/${abi}")
+            searchDirs.each { baseDir ->
+                def candidates = [
+                    file("${baseDir}/debug/obj/${abi}"),
+                    file("${baseDir}/release/obj/${abi}"),
+                    file("${baseDir}/relWithDebInfo/obj/${abi}"),
+                    file("${baseDir}/obj/${abi}")
+                ]
+                candidates.each { srcDir ->
+                    if (srcDir.exists()) {
+                        destDir.mkdirs()
+                        srcDir.listFiles({ f -> f.name.endsWith('.so') } as FileFilter)?.each { soFile ->
+                            def jniExisting = file("${jniLibsDir}/${abi}/${soFile.name}")
+                            if (jniExisting.exists()) {
+                                return
+                            }
+                            def dest = new File(destDir, soFile.name)
+                            dest.bytes = soFile.bytes
+                        }
+                    }
+                }
+            }
+        }
+        if (!nativeLibsCacheDir.exists() || !nativeLibsCacheDir.listFiles()) {
+            logger.warn('[cacheNativeLibs] No cached native libs found. Run a full build first (without -PskipNativeBuild).')
+        } else {
+            logger.lifecycle("[cacheNativeLibs] Native libs cached to ${nativeLibsCacheDir.absolutePath}")
+        }
+    }
+}
+
+tasks.matching { it.name == 'assembleDebug' || it.name == 'assembleRelease' }.configureEach {
+    if (!skipNativeBuild) {
+        finalizedBy 'cacheNativeLibs'
+    }
 }
