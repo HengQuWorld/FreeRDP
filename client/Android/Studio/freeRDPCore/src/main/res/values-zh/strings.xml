@@ -172,4 +172,11 @@
     <string name="debug_level">调试级别</string>
     <string name="settings_debug">调试设置</string>
     <string name="preference_title_client">客户端</string>
+
+    <string name="agreements_consent_title">协议阅读与确认</string>
+    <string name="agreements_consent_message">首次使用前，请您完整阅读并确认《碧虎远程桌面隐私协议》与《碧虎远程桌面用户协议》。点击\"同意并继续\"即表示您已阅读、理解并同意上述协议。</string>
+    <string name="privacy_policy_section_title">隐私协议</string>
+    <string name="user_agreement_section_title">用户协议</string>
+    <string name="btn_exit_app">退出应用</string>
+    <string name="btn_agree_continue">同意并继续</string>
 </resources>

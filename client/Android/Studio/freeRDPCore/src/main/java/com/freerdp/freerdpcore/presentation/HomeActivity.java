@@ -40,10 +40,36 @@ public class HomeActivity extends AppCompatActivity
 	private BookmarkListAdapter bookmarkListAdapter;
 	private MenuItem searchMenuItem;
 	private SearchView searchView;
+	private boolean agreementsAccepted;
 
 	@Override public void onCreate(Bundle savedInstanceState)
 	{
 		super.onCreate(savedInstanceState);
+
+		agreementsAccepted = AgreementsConsentDialog.hasAcceptedLaunchAgreements(this);
+		if (!agreementsAccepted)
+		{
+			showAgreementsConsentDialog();
+			return;
+		}
+
+		initHomeView(savedInstanceState);
+	}
+
+	private void showAgreementsConsentDialog()
+	{
+		AgreementsConsentDialog dialog = new AgreementsConsentDialog(this,
+			() -> {
+				agreementsAccepted = true;
+				initHomeView(null);
+			},
+			() -> finish()
+		);
+		dialog.show();
+	}
+
+	private void initHomeView(Bundle savedInstanceState)
+	{
 		binding = HomeBinding.inflate(getLayoutInflater());
 		setContentView(binding.getRoot());
 
@@ -142,13 +168,15 @@ public class HomeActivity extends AppCompatActivity
 	{
 		super.onResume();
 		Log.v(TAG, "HomeActivity.onResume");
-		viewModel.loadBookmarks(viewModel.getCurrentQuery());
+		if (viewModel != null)
+			viewModel.loadBookmarks(viewModel.getCurrentQuery());
 	}
 
 	@Override protected void onSaveInstanceState(Bundle outState)
 	{
 		super.onSaveInstanceState(outState);
-		outState.putString(PARAM_SEARCH_QUERY, viewModel.getCurrentQuery());
+		if (viewModel != null)
+			outState.putString(PARAM_SEARCH_QUERY, viewModel.getCurrentQuery());
 	}
 
 	@Override public boolean onCreateOptionsMenu(Menu menu)
@@ -195,12 +223,15 @@ public class HomeActivity extends AppCompatActivity
 		{
 			searchView = (SearchView)searchMenuItem.getActionView();
 
-			String currentQuery = viewModel.getCurrentQuery();
-			if (currentQuery != null && !currentQuery.isEmpty())
+			if (viewModel != null)
 			{
-				searchMenuItem.expandActionView();
-				searchView.setQuery(currentQuery, false);
-				searchView.clearFocus();
+				String currentQuery = viewModel.getCurrentQuery();
+				if (currentQuery != null && !currentQuery.isEmpty())
+				{
+					searchMenuItem.expandActionView();
+					searchView.setQuery(currentQuery, false);
+					searchView.clearFocus();
+				}
 			}
 
 			searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
@@ -211,7 +242,8 @@ public class HomeActivity extends AppCompatActivity
 
 				@Override public boolean onQueryTextChange(String s)
 				{
-					viewModel.loadBookmarks(s);
+					if (viewModel != null)
+						viewModel.loadBookmarks(s);
 					return true;
 				}
 			});

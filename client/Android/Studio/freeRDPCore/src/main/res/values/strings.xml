@@ -288,4 +288,11 @@
     </string-array>
 
     <string name="preference_key_h264" translatable="false">bookmark.perf_gfx_h264</string>
+
+    <string name="agreements_consent_title">Agreement Review &amp; Confirmation</string>
+    <string name="agreements_consent_message">Before first use, please read and confirm the Bihu Remote Desktop Privacy Policy and User Agreement in full. By clicking \"Agree and Continue\", you acknowledge that you have read, understood, and agree to the above agreements.</string>
+    <string name="privacy_policy_section_title">Privacy Policy</string>
+    <string name="user_agreement_section_title">User Agreement</string>
+    <string name="btn_exit_app">Exit App</string>
+    <string name="btn_agree_continue">Agree &amp; Continue</string>
 </resources>
