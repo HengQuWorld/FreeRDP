@@ -83,6 +83,7 @@ export struct RemoteDesktopSurface {
   private lastMouseX: number = -1;
   private lastMouseY: number = -1;
   private ctrlPressed: boolean = false;
+  private shiftPressed: boolean = false;
   private edgeClampEnabled: boolean = true;
   private imfAttached: boolean = false;
   private onInsertText: ((text: string) => void) | null = null;
@@ -343,19 +344,23 @@ export struct RemoteDesktopSurface {
         continue;
       }
 
-      if (codepoint > 0x7f) {
-        console.info(`RemoteDesktopSurface: sending unicode U+${codepoint.toString(16).toUpperCase()} '${ch}'`);
+      if (codepoint === 9) {
+        const tab: number = KeyboardMapper.mapKeyScancode('Tab', 0);
+        if (tab > 0) {
+          this.onKeyScancode(tab, true);
+          this.onKeyScancode(tab, false);
+        }
+        continue;
+      }
+
+      // Use Unicode key events for all printable characters from IME input.
+      // Scancodes represent physical key positions and do not carry case information;
+      // sending an uppercase letter as a scancode without Shift produces a lowercase
+      // letter on the remote desktop.  Unicode key events carry the actual codepoint,
+      // so 'A' (U+0041) is correctly interpreted as uppercase.
+      if (codepoint >= 0x20) {
         this.onUnicodeKey(codepoint, true);
         this.onUnicodeKey(codepoint, false);
-      } else {
-        const scancode: number = KeyboardMapper.mapKeyScancode(ch, 0);
-        if (scancode > 0) {
-          this.onKeyScancode(scancode, true);
-          this.onKeyScancode(scancode, false);
-        } else {
-          this.onUnicodeKey(codepoint, true);
-          this.onUnicodeKey(codepoint, false);
-        }
       }
     }
   }
@@ -385,6 +390,13 @@ export struct RemoteDesktopSurface {
       this.ctrlPressed = event.type === KeyType.Down;
     }
 
+    // Track Shift state: HarmonyOS hardware-keyboard Shift+A fires keyText='A'
+    // only (no separate Shift event), so we treat the Shift event text as the
+    // canonical Shift update when present.
+    if (event.keyText === 'Shift') {
+      this.shiftPressed = event.type === KeyType.Down;
+    }
+
     if (this.stage !== SessionStage.Connected) {
       return;
     }
@@ -396,29 +408,44 @@ export struct RemoteDesktopSurface {
     }
 
     const text: string = typeof event.keyText === 'string' ? event.keyText : '';
-    let isTextEvent: boolean = false;
-    if (text) {
-      if (event.keyCode === 0) {
-        isTextEvent = true;
-      }
-      for (const ch of text) {
-        if ((ch.codePointAt(0) ?? 0) > 0x7f) {
-          isTextEvent = true;
-          break;
+
+    // Route IME / committed text (anything above printable ASCII) through
+    // Unicode key events.  Scancodes represent physical key positions and do
+    // not carry case or locale information, so a scancode-based 'A' would
+    // produce 'a' on the remote, and Chinese characters would be lost.
+    if (text.length > 0) {
+      let isTextEvent: boolean = event.keyCode === 0;
+      if (!isTextEvent) {
+        for (const ch of text) {
+          if ((ch.codePointAt(0) ?? 0) > 0x7f) {
+            isTextEvent = true;
+            break;
+          }
         }
       }
-    }
-
-    if (isTextEvent) {
-      if (isDown) {
-        this.sendRemoteCommittedText(text);
+      if (isTextEvent) {
+        if (isDown) {
+          this.sendRemoteCommittedText(text);
+        }
+        return;
       }
-      return;
     }
 
     const scancode: number = KeyboardMapper.mapKeyScancode(event.keyText, event.keyCode);
     if (scancode > 0) {
-      this.onKeyScancode(scancode, isDown);
+      // For hardware keyboard, an uppercase letter arriving without Shift
+      // pressed implies local CapsLock.  Inject a synthetic Shift press
+      // around the letter scancode so the remote also emits uppercase.
+      const code: number = text.length === 1 ? text.charCodeAt(0) : 0;
+      const needsShift: boolean = isDown && code >= 65 && code <= 90 && !this.shiftPressed;
+      if (needsShift) {
+        const shift: number = KeyboardMapper.mapKeyScancode('Shift', 0);
+        this.onKeyScancode(shift, true);
+        this.onKeyScancode(scancode, isDown);
+        this.onKeyScancode(shift, false);
+      } else {
+        this.onKeyScancode(scancode, isDown);
+      }
       return;
     }
 
