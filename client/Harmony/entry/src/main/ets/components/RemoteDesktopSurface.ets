@@ -31,6 +31,7 @@ export struct RemoteDesktopSurface {
   @Prop sessionId: number;
   @Prop @Watch('onStageConnected') stage: SessionStage;
   @Prop snapshot: SessionSnapshot;
+  @Prop statusMessage: string = '';
   @Prop keyboardRequestToken: number = 0;
   @Prop isFullscreen: boolean = false;
   @Prop @Watch('onThemeChanged') isDark: boolean = false;
@@ -1008,6 +1009,37 @@ export struct RemoteDesktopSurface {
           .onAxisEvent((event: AxisEvent) => {
             this.handleAxis(event);
           })
+      }
+
+      if (this.stage === SessionStage.Disconnected || this.stage === SessionStage.Error) {
+        Column({ space: 12 }) {
+          Text(this.stage === SessionStage.Error
+            ? i18n.get(this.appLanguage, 'error_overlay_title')
+            : i18n.get(this.appLanguage, 'disconnected_overlay_title'))
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#ffffff')
+
+          Text(i18n.get(this.appLanguage, 'disconnected_overlay_hint'))
+            .fontSize(14)
+            .fontColor('rgba(255,255,255,0.7)')
+          if (this.stage === SessionStage.Error) {
+            Text(this.statusMessage)
+              .fontSize(12)
+              .fontColor('rgba(255,255,255,0.55)')
+              .maxLines(3)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('80%')
+              .textAlign(TextAlign.Center)
+          }
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .backgroundColor('rgba(30,30,30,0.72)')
+        .backdropBlur(8)
+        .zIndex(10)
       }
 
       if (this.stage === SessionStage.Connected) {

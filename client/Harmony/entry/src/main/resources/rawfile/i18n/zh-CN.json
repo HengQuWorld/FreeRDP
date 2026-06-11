@@ -163,6 +163,10 @@
     "status.connecting": "连接中",
     "status.error": "连接失败",
     "status.disconnected": "已断开",
-    "status.idle": "未连接"
+    "status.idle": "未连接",
+    "disconnected_overlay_title": "连接已断开",
+    "disconnected_overlay_hint": "远程桌面连接已关闭",
+    "error_overlay_title": "连接失败",
+    "back_to_home": "返回"
   }
 }

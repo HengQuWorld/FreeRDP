@@ -344,6 +344,28 @@ class SessionManagerImpl {
       index += 1;
     }
 
+    if (!shouldRefreshState &&
+        record.state.stage !== SessionStage.Disconnected &&
+        record.state.stage !== SessionStage.Error) {
+      try {
+        const reconciledState: SessionState = sessionBridge.getState(sessionId);
+        if (reconciledState.stage !== record.state.stage ||
+            reconciledState.message !== record.state.message ||
+            reconciledState.certCommonName !== record.state.certCommonName) {
+          if (!this.cnNotifiedSessionIds.has(sessionId) &&
+              reconciledState.certCommonName.length > 0) {
+            this.cnNotifiedSessionIds.add(sessionId);
+            this.notifyCnDiscovered(sessionId, reconciledState.certCommonName);
+          }
+          record.state = reconciledState;
+          shouldRefreshState = true;
+        }
+      } catch (e) {
+        logger.error(LogTags.SESSION_MANAGER,
+          `Failed to reconcile state for session ${sessionId}`, e);
+      }
+    }
+
     if (shouldRefreshState) {
       try {
         const newState: SessionState = sessionBridge.getState(sessionId);

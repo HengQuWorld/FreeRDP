@@ -57,6 +57,7 @@ static void HiLogError(const std::string& message) {
 }
 
 constexpr DWORD kWaitTimeoutMs = 100;
+constexpr std::size_t kMaxConnectionHistory = 100;
 
 struct HarmonyClientContext {
   rdpClientContext common;
@@ -2034,12 +2035,17 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
           break;
         }
       }
+
+      // Mirror the normal session-thread cleanup so post-disconnect callbacks
+      // can publish a terminal state to the ArkTS layer.
+      freerdp_disconnect(instance);
+      freerdp_client_stop(context);
     } else {
       // 连接失败，记录错误
       const std::uint32_t lastError = freerdp_get_last_error(context);
       const char* lastErrorString = freerdp_get_last_error_string(lastError);
       std::string errorStr = lastErrorString ? lastErrorString : "unknown";
-      
+
       // 保存错误类型用于下一次尝试的优化
       lastErrorType_ = errorStr;
       
@@ -2222,13 +2228,13 @@ void FreeRDPHarmonySession::SaveSuccessfulProtocol(const std::string& host, int 
   HiLogInfo("History size after save: " + std::to_string(connectionHistory_.size()));
   
   // 保持历史记录数量合理
-  if (connectionHistory_.size() > 100) {
+  if (connectionHistory_.size() > kMaxConnectionHistory) {
     // 删除最旧的记录
     std::sort(connectionHistory_.begin(), connectionHistory_.end(),
               [](const ConnectionHistory& a, const ConnectionHistory& b) {
                 return a.lastUsed > b.lastUsed;
               });
-    connectionHistory_.resize(100);
+    connectionHistory_.resize(kMaxConnectionHistory);
   }
 }
 

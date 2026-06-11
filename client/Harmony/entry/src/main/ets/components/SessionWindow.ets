@@ -9,7 +9,7 @@ export struct SessionWindow {
   @Prop sessionId: number;
   @Prop title: string;
   @Prop subtitle: string;
-  @Prop stage: SessionStage;
+  @Prop @Watch('onStageChanged') stage: SessionStage;
   @Prop statusMessage: string;
   @Prop snapshot: SessionSnapshot;
   @Prop @Watch('onThemeChanged') isDark: boolean = false;
@@ -56,7 +56,20 @@ export struct SessionWindow {
     this.colors = this.isDark ? DarkColors : LightColors;
   }
 
+  onStageChanged(): void {
+    if (this.stage === SessionStage.Disconnected || this.stage === SessionStage.Error) {
+      this.chromeVisible = true;
+      if (this.chromeHideTimer !== -1) {
+        clearTimeout(this.chromeHideTimer);
+        this.chromeHideTimer = -1;
+      }
+    }
+  }
+
   private scheduleChromeAutoHide(): void {
+    if (this.stage === SessionStage.Disconnected || this.stage === SessionStage.Error) {
+      return;
+    }
     if (this.chromeHideTimer !== -1) {
       clearTimeout(this.chromeHideTimer);
     }
@@ -117,6 +130,7 @@ export struct SessionWindow {
         sessionId: this.sessionId,
         stage: this.stage,
         snapshot: this.snapshot,
+        statusMessage: this.statusMessage,
         keyboardRequestToken: this.keyboardRequestToken,
         isFullscreen: this.isFullscreen,
         isDark: this.isDark,
@@ -227,6 +241,19 @@ export struct SessionWindow {
 
           Blank()
             .layoutWeight(1)
+
+          if (this.stage === SessionStage.Disconnected || this.stage === SessionStage.Error) {
+            Button(i18n.get(this.appLanguage, 'back_to_home'))
+              .height(44)
+              .fontSize(15)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#ffffff')
+              .backgroundColor('rgba(80,80,80,0.85)')
+              .borderRadius(22)
+              .padding({ left: 32, right: 32 })
+              .margin({ bottom: this.isFullscreen ? 12 : 24 })
+              .onClick(() => this.onDisconnect())
+          }
 
           if (this.stage === SessionStage.Connected) {
             SessionToolbar({

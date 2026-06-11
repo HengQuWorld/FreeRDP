@@ -106,17 +106,14 @@ class NativeSessionBackendImpl implements SessionBackend {
   }
 
   private mapStage(nativeStage: number, connected: boolean): SessionStage {
-    if (connected || nativeStage === NATIVE_STAGE_CONNECTED) {
-      return SessionStage.Connected;
-    }
-    if (nativeStage === NATIVE_STAGE_CONNECTING) {
-      return SessionStage.Connecting;
-    }
-    if (nativeStage === NATIVE_STAGE_IDLE) {
-      return SessionStage.Idle;
-    }
+    // Terminal states must take precedence over the stale `connected` flag.
+    // When the remote side disconnects (e.g. another user logs in), the native
+    // layer reports nativeStage=DISCONNECTED but `connected` may still be true.
     if (nativeStage === NATIVE_STAGE_DISCONNECTED) {
       return SessionStage.Disconnected;
+    }
+    if (nativeStage === NATIVE_STAGE_FAILED) {
+      return SessionStage.Error;
     }
     if (nativeStage === NATIVE_STAGE_AUTH_REQUIRED) {
       return SessionStage.AuthRequired;
@@ -124,7 +121,13 @@ class NativeSessionBackendImpl implements SessionBackend {
     if (nativeStage === NATIVE_STAGE_CERT_REQUIRED) {
       return SessionStage.CertRequired;
     }
-    return SessionStage.Error;
+    if (nativeStage === NATIVE_STAGE_CONNECTED || connected) {
+      return SessionStage.Connected;
+    }
+    if (nativeStage === NATIVE_STAGE_CONNECTING) {
+      return SessionStage.Connecting;
+    }
+    return SessionStage.Idle;
   }
 
   private mapEventType(nativeType: number): SessionEventType {

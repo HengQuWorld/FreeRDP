@@ -350,7 +350,11 @@ class I18nManager {
     s['error.process_events'] = '处理远端事件失败';
     s['error.process_input'] = '处理本地输入事件失败';
     s['error.query_info'] = '无法查询会话信息';
-    s['error.session_not_found'] = '未找到会话';
+    s['status.idle'] = '未连接';
+    s['disconnected_overlay_title'] = '连接已断开';
+    s['disconnected_overlay_hint'] = '远程桌面连接已关闭';
+    s['error_overlay_title'] = '连接失败';
+    s['back_to_home'] = '返回';
     return s;
   }
 }

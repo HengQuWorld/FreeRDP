@@ -163,6 +163,10 @@
     "status.connecting": "Connecting",
     "status.error": "Failed",
     "status.disconnected": "Disconnected",
-    "status.idle": "Not connected"
+    "status.idle": "Not connected",
+    "disconnected_overlay_title": "Disconnected",
+    "disconnected_overlay_hint": "Remote desktop connection has been closed",
+    "error_overlay_title": "Connection Failed",
+    "back_to_home": "Back"
   }
 }
