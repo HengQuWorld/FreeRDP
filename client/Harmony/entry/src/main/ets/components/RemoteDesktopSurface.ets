@@ -1,5 +1,6 @@
 import { image } from '@kit.ImageKit';
 import { inputMethod } from '@kit.IMEKit';
+import { KeyCode } from '@ohos.multimodalInput.keyCode';
 import { SessionSnapshot, SessionStage } from '../model/SessionModels';
 import { KeyboardMapper } from '../utils/KeyboardMapper';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
@@ -85,12 +86,19 @@ export struct RemoteDesktopSurface {
   private lastMouseY: number = -1;
   private ctrlPressed: boolean = false;
   private shiftPressed: boolean = false;
+  private altPressed: boolean = false;
+  private metaPressed: boolean = false;
   private edgeClampEnabled: boolean = true;
   private imfAttached: boolean = false;
   private onInsertText: ((text: string) => void) | null = null;
   private onDeleteLeft: ((length: number) => void) | null = null;
   private onDeleteRight: ((length: number) => void) | null = null;
   private imeSuppressTextChange: boolean = false;
+  private softInputFocused: boolean = false;
+  private lastHandledKeySignature: string = '';
+  private lastHandledKeyTs: number = 0;
+  private lastSyntheticKeyTapCode: number = -1;
+  private lastSyntheticKeyTapTs: number = 0;
 
   private surfaceController: XComponentController = new XComponentController();
 
@@ -100,6 +108,16 @@ export struct RemoteDesktopSurface {
 
   private readonly rootStackKey: string = 'rdp_root_stack_' + this.sessionId;
   private readonly inputLayerKey: string = 'rdp_input_layer_' + this.sessionId;
+  private getModifierState(event: KeyEvent, key: string): boolean {
+    if (typeof event?.getModifierKeyState !== 'function') {
+      return false;
+    }
+    try {
+      return event.getModifierKeyState([key]);
+    } catch (_error) {
+      return false;
+    }
+  }
 
   private getSoftInputId(): string {
     return 'rdp_soft_input_' + this.sessionId;
@@ -233,6 +251,7 @@ export struct RemoteDesktopSurface {
       try {
         const fc = this.getUIContext()?.getFocusController?.();
         fc?.requestFocus?.(this.getSoftInputId());
+        this.softInputFocused = true;
       } catch (_error) {
       }
     }, 0);
@@ -241,6 +260,9 @@ export struct RemoteDesktopSurface {
   private showSoftKeyboard(): void {
     if (this.stage !== SessionStage.Connected) {
       return;
+    }
+    if (!this.imfAttached) {
+      this.attachInputMethod();
     }
     this.focusSoftInputLater();
     setTimeout(() => {
@@ -272,23 +294,13 @@ export struct RemoteDesktopSurface {
       this.imfAttached = true;
       console.info('FreeRDP: IMF attached via attach(false)');
     } catch (_attachErr) {
-      console.warn(`FreeRDP: attach(false) failed, trying showTextInput+hiding: ${_attachErr}`);
-      this.showSoftKeyboard();
-      setTimeout(() => {
-        try {
-          inputMethod.getController().hideTextInput();
-        } catch (_hideErr) {
-        }
-        this.imfAttached = true;
-        console.info('FreeRDP: IMF attached via showTextInput+hiding');
-      }, 100);
-      return;
+      console.warn(`FreeRDP: attach(false) failed: ${_attachErr}`);
     }
   }
 
   onStageConnected(): void {
-    if (this.stage === SessionStage.Connected && !this.imfAttached) {
-      this.attachInputMethod();
+    if (this.stage === SessionStage.Connected) {
+      this.requestInputFocus();
     }
   }
 
@@ -312,6 +324,39 @@ export struct RemoteDesktopSurface {
       deletedCount: prevChars.length - prefix - suffix,
       insertedText: nextChars.slice(prefix, nextChars.length - suffix).join('')
     };
+  }
+
+  private resetSoftInputDraft(): void {
+    this.softInputDraft = '';
+  }
+
+  private clearSoftInputDraftSoon(): void {
+    this.imeSuppressTextChange = true;
+    this.softInputDraft = '';
+    setTimeout(() => {
+      this.imeSuppressTextChange = false;
+    }, 50);
+  }
+
+  private suppressSoftInputChangeBriefly(): void {
+    this.imeSuppressTextChange = true;
+    setTimeout(() => {
+      this.imeSuppressTextChange = false;
+    }, 120);
+  }
+
+  private shouldSkipDuplicateKeyEvent(event: KeyEvent): boolean {
+    const signature: string =
+      `${event.type}|${event.keyCode ?? -1}|${typeof event.keyText === 'string' ? event.keyText : ''}|` +
+      `${this.getModifierState(event, 'Shift')}|${this.getModifierState(event, 'Ctrl')}|` +
+      `${this.getModifierState(event, 'Alt')}|${this.getModifierState(event, 'Meta')}`;
+    const now: number = Date.now();
+    if (signature === this.lastHandledKeySignature && now - this.lastHandledKeyTs <= 16) {
+      return true;
+    }
+    this.lastHandledKeySignature = signature;
+    this.lastHandledKeyTs = now;
+    return false;
   }
 
   private sendRemoteBackspace(count: number): void {
@@ -377,6 +422,10 @@ export struct RemoteDesktopSurface {
       return;
     }
 
+    if (this.imfAttached) {
+      return;
+    }
+
     const delta: TextDelta = this.buildTextDelta(previous, next);
     if (delta.deletedCount > 0) {
       this.sendRemoteBackspace(delta.deletedCount);
@@ -384,31 +433,112 @@ export struct RemoteDesktopSurface {
     if (delta.insertedText.length > 0) {
       this.sendRemoteCommittedText(delta.insertedText);
     }
+    if (delta.deletedCount > 0 || delta.insertedText.length > 0) {
+      this.clearSoftInputDraftSoon();
+    }
+  }
+
+  private isShiftKeyCode(keyCode: number): boolean {
+    return keyCode === KeyCode.KEYCODE_SHIFT_LEFT || keyCode === KeyCode.KEYCODE_SHIFT_RIGHT;
+  }
+
+  private isCtrlKeyCode(keyCode: number): boolean {
+    return keyCode === KeyCode.KEYCODE_CTRL_LEFT ||
+      keyCode === KeyCode.KEYCODE_CTRL_RIGHT ||
+      keyCode === 2072 ||
+      keyCode === 2073;
+  }
+
+  private isAltKeyCode(keyCode: number): boolean {
+    return keyCode === KeyCode.KEYCODE_ALT_LEFT || keyCode === KeyCode.KEYCODE_ALT_RIGHT;
+  }
+
+  private isMetaKeyCode(keyCode: number): boolean {
+    return keyCode === KeyCode.KEYCODE_META_LEFT || keyCode === KeyCode.KEYCODE_META_RIGHT;
+  }
+
+  private shouldSynthesizeTapOnKeyUp(keyCode: number, isDown: boolean, isUp: boolean): boolean {
+    if (isDown || !isUp) {
+      return false;
+    }
+    if (keyCode !== KeyCode.KEYCODE_DEL && keyCode !== KeyCode.KEYCODE_FORWARD_DEL) {
+      return false;
+    }
+    const now: number = Date.now();
+    if (this.lastSyntheticKeyTapCode === keyCode && now - this.lastSyntheticKeyTapTs <= 120) {
+      return false;
+    }
+    this.lastSyntheticKeyTapCode = keyCode;
+    this.lastSyntheticKeyTapTs = now;
+    return true;
+  }
+
+  private syncRemoteModifiers(event: KeyEvent): void {
+    const shiftState: boolean = this.getModifierState(event, 'Shift');
+    const ctrlState: boolean = this.getModifierState(event, 'Ctrl');
+    const altState: boolean = this.getModifierState(event, 'Alt');
+    const metaState: boolean = this.getModifierState(event, 'Meta');
+    const shiftScancode: number = KeyboardMapper.mapKeyScancode('Shift', 0);
+    const ctrlScancode: number = KeyboardMapper.mapKeyScancode('Control', 0);
+    const altScancode: number = KeyboardMapper.mapKeyScancode('Alt', 0);
+    const metaScancode: number = KeyboardMapper.mapKeyScancode('Meta', 0);
+
+    if (shiftScancode > 0 && shiftState !== this.shiftPressed) {
+      this.onKeyScancode(shiftScancode, shiftState);
+      this.shiftPressed = shiftState;
+    }
+    if (ctrlScancode > 0 && ctrlState !== this.ctrlPressed) {
+      this.onKeyScancode(ctrlScancode, ctrlState);
+      this.ctrlPressed = ctrlState;
+    }
+    if (altScancode > 0 && altState !== this.altPressed) {
+      this.onKeyScancode(altScancode, altState);
+      this.altPressed = altState;
+    }
+    if (metaScancode > 0 && metaState !== this.metaPressed) {
+      this.onKeyScancode(metaScancode, metaState);
+      this.metaPressed = metaState;
+    }
   }
 
   private handleKey(event: KeyEvent): void {
-    if (event.keyCode === 2072 || event.keyCode === 2073) {
-      this.ctrlPressed = event.type === KeyType.Down;
-    }
-
-    // Track Shift state: HarmonyOS hardware-keyboard Shift+A fires keyText='A'
-    // only (no separate Shift event), so we treat the Shift event text as the
-    // canonical Shift update when present.
-    if (event.keyText === 'Shift') {
-      this.shiftPressed = event.type === KeyType.Down;
-    }
-
+    const keyCode: number = event.keyCode ?? 0;
+    const text: string = typeof event.keyText === 'string' ? event.keyText : '';
+    const isDown: boolean = event.type === KeyType.Down;
+    const isUp: boolean = event.type === KeyType.Up;
+    const isShiftKey: boolean = this.isShiftKeyCode(keyCode);
+    const isCtrlKey: boolean = this.isCtrlKeyCode(keyCode);
+    const isAltKey: boolean = this.isAltKeyCode(keyCode);
+    const isMetaKey: boolean = this.isMetaKeyCode(keyCode);
+    const isModifierKey: boolean = isShiftKey || isCtrlKey || isAltKey || isMetaKey;
     if (this.stage !== SessionStage.Connected) {
       return;
     }
 
-    const isDown: boolean = event.type === KeyType.Down;
-    const isUp: boolean = event.type === KeyType.Up;
     if (!isDown && !isUp) {
       return;
     }
 
-    const text: string = typeof event.keyText === 'string' ? event.keyText : '';
+    if (this.shouldSkipDuplicateKeyEvent(event)) {
+      return;
+    }
+
+    if (!isModifierKey) {
+      this.syncRemoteModifiers(event);
+    } else {
+      if (isShiftKey) {
+        this.shiftPressed = isDown;
+      }
+      if (isCtrlKey) {
+        this.ctrlPressed = isDown;
+      }
+      if (isAltKey) {
+        this.altPressed = isDown;
+      }
+      if (isMetaKey) {
+        this.metaPressed = isDown;
+      }
+    }
 
     // Route IME / committed text (anything above printable ASCII) through
     // Unicode key events.  Scancodes represent physical key positions and do
@@ -434,11 +564,17 @@ export struct RemoteDesktopSurface {
 
     const scancode: number = KeyboardMapper.mapKeyScancode(event.keyText, event.keyCode);
     if (scancode > 0) {
+      if (this.shouldSynthesizeTapOnKeyUp(keyCode, isDown, isUp)) {
+        this.onKeyScancode(scancode, true);
+        this.onKeyScancode(scancode, false);
+        return;
+      }
       // For hardware keyboard, an uppercase letter arriving without Shift
       // pressed implies local CapsLock.  Inject a synthetic Shift press
       // around the letter scancode so the remote also emits uppercase.
       const code: number = text.length === 1 ? text.charCodeAt(0) : 0;
-      const needsShift: boolean = isDown && code >= 65 && code <= 90 && !this.shiftPressed;
+      const needsShift: boolean = isDown && code >= 65 && code <= 90 && !this.getModifierState(event, 'Shift') &&
+        !isShiftKey;
       if (needsShift) {
         const shift: number = KeyboardMapper.mapKeyScancode('Shift', 0);
         this.onKeyScancode(shift, true);
@@ -887,6 +1023,7 @@ export struct RemoteDesktopSurface {
       this.imeSuppressTextChange = true;
       console.info(`FreeRDP: IME insertText '${text}'`);
       this.sendRemoteCommittedText(text);
+      this.resetSoftInputDraft();
       setTimeout(() => {
         this.imeSuppressTextChange = false;
       }, 50);
@@ -898,6 +1035,7 @@ export struct RemoteDesktopSurface {
       this.imeSuppressTextChange = true;
       console.info(`FreeRDP: IME deleteLeft ${length}`);
       this.sendRemoteBackspace(length);
+      this.resetSoftInputDraft();
       setTimeout(() => {
         this.imeSuppressTextChange = false;
       }, 50);
@@ -915,13 +1053,11 @@ export struct RemoteDesktopSurface {
     this.refreshTimer = setInterval(() => {
       this.refreshPixelMap();
     }, 120);
-    if (this.stage === SessionStage.Connected && !this.imfAttached) {
-      this.attachInputMethod();
-    }
   }
 
   aboutToDisappear(): void {
     this.imfAttached = false;
+    this.softInputFocused = false;
     this.setSurfaceId('');
     if (this.onInsertText !== null) {
       try { inputMethod.getController().off('insertText', this.onInsertText); } catch (_) {}
@@ -1043,7 +1179,7 @@ export struct RemoteDesktopSurface {
       }
 
       if (this.stage === SessionStage.Connected) {
-        TextInput({ text: this.softInputDraft, placeholder: '' })
+        TextArea({ text: this.softInputDraft, placeholder: '' })
           .id(this.getSoftInputId())
           .width(1)
           .height(1)
@@ -1054,18 +1190,32 @@ export struct RemoteDesktopSurface {
           .backgroundColor(Color.Transparent)
           .position({ x: -100, y: -100 })
           .focusOnTouch(false)
-          .enableKeyboardOnFocus(false)
+          .onFocus(() => {
+            this.softInputFocused = true;
+          })
+          .onBlur(() => {
+            this.softInputFocused = false;
+          })
           .onChange((value: string) => {
             this.handleSoftInputChange(value);
           })
-          .onSubmit((_: EnterKeyType) => {
-            const enter: number = KeyboardMapper.mapKeyScancode('Enter', 0);
-            if (enter > 0) {
-              this.onKeyScancode(enter, true);
-              setTimeout(() => {
-                this.onKeyScancode(enter, false);
-              }, 10);
+          .onKeyEvent((event: KeyEvent) => {
+            const ctrlLike: boolean = this.getModifierState(event, 'Ctrl') ||
+              this.getModifierState(event, 'Alt') ||
+              this.getModifierState(event, 'Meta');
+            const keyText: string = typeof event.keyText === 'string' ? event.keyText : '';
+            const normalizedKey: string = keyText.toUpperCase();
+            if (ctrlLike && event.type === KeyType.Down &&
+              (normalizedKey === 'KEYCODE_V' || normalizedKey === 'KEYCODE_C' || normalizedKey === 'KEYCODE_X' ||
+                normalizedKey === 'KEYCODE_A' || normalizedKey === 'KEYCODE_Z')) {
+              this.suppressSoftInputChangeBriefly();
+              this.resetSoftInputDraft();
             }
+            if (!ctrlLike && !KeyboardMapper.shouldCaptureInTextInput(event.keyText, event.keyCode ?? 0)) {
+              return false;
+            }
+            this.handleKey(event);
+            return true;
           })
       }
     }
@@ -1079,6 +1229,13 @@ export struct RemoteDesktopSurface {
     .focusOnTouch(false)
     .defaultFocus(true)
     .onKeyEvent((event: KeyEvent) => {
+      const ctrlLike: boolean = this.getModifierState(event, 'Ctrl') ||
+        this.getModifierState(event, 'Alt') ||
+        this.getModifierState(event, 'Meta');
+      if (this.softInputFocused &&
+        (ctrlLike || KeyboardMapper.shouldCaptureInTextInput(event.keyText, event.keyCode ?? 0))) {
+        return false;
+      }
       this.handleKey(event);
       return true;
     })

@@ -1,3 +1,5 @@
+import { KeyCode } from '@ohos.multimodalInput.keyCode';
+
 export class KeyboardMapper {
   // Defines key states for modifier keys
   public static readonly KEYSTATE_ON = 1;
@@ -96,9 +98,62 @@ export class KeyboardMapper {
   private static readonly RDP_SCANCODE_PRINTSCREEN = 0x0137;
   private static readonly RDP_SCANCODE_PAUSE = 0x0045;
 
-  public static mapKeyScancode(keyText: string, keyCode: number): number {
+  private static normalizeKeyText(keyText: string): string {
+    switch (keyText) {
+      case 'Left':
+      case 'DPAD_LEFT':
+      case 'KEYCODE_DPAD_LEFT':
+        return 'ArrowLeft';
+      case 'Right':
+      case 'DPAD_RIGHT':
+      case 'KEYCODE_DPAD_RIGHT':
+        return 'ArrowRight';
+      case 'Up':
+      case 'DPAD_UP':
+      case 'KEYCODE_DPAD_UP':
+        return 'ArrowUp';
+      case 'Down':
+      case 'DPAD_DOWN':
+      case 'KEYCODE_DPAD_DOWN':
+        return 'ArrowDown';
+      case 'Esc':
+        return 'Escape';
+      case 'KEYCODE_DEL':
+        return 'Backspace';
+      case 'KEYCODE_FORWARD_DEL':
+        return 'Delete';
+      case 'KEYCODE_ENTER':
+        return 'Enter';
+      case 'ForwardDelete':
+        return 'Delete';
+      case 'ControlLeft':
+      case 'ControlRight':
+      case 'Ctrl':
+        return 'Control';
+      case 'ShiftLeft':
+      case 'ShiftRight':
+        return 'Shift';
+      case 'AltLeft':
+      case 'AltRight':
+        return 'Alt';
+      case 'MetaLeft':
+      case 'MetaRight':
+        return 'Meta';
+      case 'Spacebar':
+        return 'Space';
+      case 'MoveHome':
+        return 'Home';
+      case 'MoveEnd':
+        return 'End';
+      default:
+        return keyText;
+    }
+  }
+
+  private static mapNamedKeyScancode(keyText: string): number {
     switch (keyText) {
       case 'Enter': return KeyboardMapper.RDP_SCANCODE_RETURN;
+      case 'NumpadEnter': return KeyboardMapper.RDP_SCANCODE_RETURN;
       case 'Backspace': return KeyboardMapper.RDP_SCANCODE_BACKSPACE;
       case 'Tab': return KeyboardMapper.RDP_SCANCODE_TAB;
       case 'Escape': return KeyboardMapper.RDP_SCANCODE_ESCAPE;
@@ -137,7 +192,10 @@ export class KeyboardMapper {
       case 'ContextMenu': return KeyboardMapper.RDP_SCANCODE_APPS;
       default: break;
     }
+    return 0;
+  }
 
+  private static mapPrintableScancode(keyText: string): number {
     if (keyText.length === 1) {
       const upper = keyText.toUpperCase();
       switch (upper) {
@@ -192,5 +250,169 @@ export class KeyboardMapper {
       }
     }
     return 0;
+  }
+
+  private static mapHarmonyKeyCode(keyCode: number): number {
+    if (keyCode >= KeyCode.KEYCODE_A && keyCode <= KeyCode.KEYCODE_Z) {
+      const letter = String.fromCharCode('A'.charCodeAt(0) + (keyCode - KeyCode.KEYCODE_A));
+      return KeyboardMapper.mapPrintableScancode(letter);
+    }
+
+    if (keyCode >= KeyCode.KEYCODE_0 && keyCode <= KeyCode.KEYCODE_9) {
+      const offset = keyCode - KeyCode.KEYCODE_0;
+      const digit = String((offset + 10) % 10);
+      return KeyboardMapper.mapPrintableScancode(digit);
+    }
+
+    if (keyCode >= KeyCode.KEYCODE_F1 && keyCode <= KeyCode.KEYCODE_F12) {
+      const functionKey = `F${keyCode - KeyCode.KEYCODE_F1 + 1}`;
+      return KeyboardMapper.mapNamedKeyScancode(functionKey);
+    }
+
+    switch (keyCode) {
+      case KeyCode.KEYCODE_ENTER:
+      case KeyCode.KEYCODE_NUMPAD_ENTER:
+        return KeyboardMapper.RDP_SCANCODE_RETURN;
+      case KeyCode.KEYCODE_DEL:
+        return KeyboardMapper.RDP_SCANCODE_BACKSPACE;
+      case KeyCode.KEYCODE_FORWARD_DEL:
+        return KeyboardMapper.RDP_SCANCODE_DELETE;
+      case KeyCode.KEYCODE_TAB:
+        return KeyboardMapper.RDP_SCANCODE_TAB;
+      case KeyCode.KEYCODE_ESCAPE:
+        return KeyboardMapper.RDP_SCANCODE_ESCAPE;
+      case KeyCode.KEYCODE_SPACE:
+        return KeyboardMapper.RDP_SCANCODE_SPACE;
+      case KeyCode.KEYCODE_DPAD_LEFT:
+        return KeyboardMapper.RDP_SCANCODE_LEFT;
+      case KeyCode.KEYCODE_DPAD_RIGHT:
+        return KeyboardMapper.RDP_SCANCODE_RIGHT;
+      case KeyCode.KEYCODE_DPAD_UP:
+        return KeyboardMapper.RDP_SCANCODE_UP;
+      case KeyCode.KEYCODE_DPAD_DOWN:
+        return KeyboardMapper.RDP_SCANCODE_DOWN;
+      case KeyCode.KEYCODE_INSERT:
+        return KeyboardMapper.RDP_SCANCODE_INSERT;
+      case KeyCode.KEYCODE_MOVE_HOME:
+      case KeyCode.KEYCODE_HOME:
+        return KeyboardMapper.RDP_SCANCODE_HOME;
+      case KeyCode.KEYCODE_MOVE_END:
+        return KeyboardMapper.RDP_SCANCODE_END;
+      case KeyCode.KEYCODE_PAGE_UP:
+        return KeyboardMapper.RDP_SCANCODE_PAGEUP;
+      case KeyCode.KEYCODE_PAGE_DOWN:
+        return KeyboardMapper.RDP_SCANCODE_PAGEDOWN;
+      case KeyCode.KEYCODE_SHIFT_LEFT:
+        return KeyboardMapper.RDP_SCANCODE_LSHIFT;
+      case KeyCode.KEYCODE_SHIFT_RIGHT:
+        return KeyboardMapper.RDP_SCANCODE_RSHIFT;
+      case KeyCode.KEYCODE_CTRL_LEFT:
+        return KeyboardMapper.RDP_SCANCODE_LCONTROL;
+      case KeyCode.KEYCODE_CTRL_RIGHT:
+        return KeyboardMapper.RDP_SCANCODE_RCONTROL;
+      case KeyCode.KEYCODE_ALT_LEFT:
+        return KeyboardMapper.RDP_SCANCODE_LALT;
+      case KeyCode.KEYCODE_ALT_RIGHT:
+        return KeyboardMapper.RDP_SCANCODE_RALT;
+      case KeyCode.KEYCODE_META_LEFT:
+        return KeyboardMapper.RDP_SCANCODE_LWIN;
+      case KeyCode.KEYCODE_META_RIGHT:
+        return KeyboardMapper.RDP_SCANCODE_RWIN;
+      case KeyCode.KEYCODE_CAPS_LOCK:
+        return KeyboardMapper.RDP_SCANCODE_CAPSLOCK;
+      case KeyCode.KEYCODE_NUM_LOCK:
+        return KeyboardMapper.RDP_SCANCODE_NUMLOCK;
+      case KeyCode.KEYCODE_SCROLL_LOCK:
+        return KeyboardMapper.RDP_SCANCODE_SCROLLLOCK;
+      case KeyCode.KEYCODE_SYSRQ:
+        return KeyboardMapper.RDP_SCANCODE_PRINTSCREEN;
+      case KeyCode.KEYCODE_BREAK:
+        return KeyboardMapper.RDP_SCANCODE_PAUSE;
+      case KeyCode.KEYCODE_COMMA:
+        return KeyboardMapper.RDP_SCANCODE_OEM_COMMA;
+      case KeyCode.KEYCODE_PERIOD:
+        return KeyboardMapper.RDP_SCANCODE_OEM_PERIOD;
+      case KeyCode.KEYCODE_MINUS:
+        return KeyboardMapper.RDP_SCANCODE_OEM_MINUS;
+      case KeyCode.KEYCODE_EQUALS:
+        return KeyboardMapper.RDP_SCANCODE_OEM_PLUS;
+      case KeyCode.KEYCODE_LEFT_BRACKET:
+        return KeyboardMapper.RDP_SCANCODE_OEM_4;
+      case KeyCode.KEYCODE_RIGHT_BRACKET:
+        return KeyboardMapper.RDP_SCANCODE_OEM_6;
+      case KeyCode.KEYCODE_BACKSLASH:
+        return KeyboardMapper.RDP_SCANCODE_OEM_5;
+      case KeyCode.KEYCODE_SEMICOLON:
+        return KeyboardMapper.RDP_SCANCODE_OEM_1;
+      case KeyCode.KEYCODE_APOSTROPHE:
+        return KeyboardMapper.RDP_SCANCODE_OEM_7;
+      case KeyCode.KEYCODE_GRAVE:
+        return KeyboardMapper.RDP_SCANCODE_OEM_3;
+      case KeyCode.KEYCODE_SLASH:
+        return KeyboardMapper.RDP_SCANCODE_OEM_2;
+      default:
+        return 0;
+    }
+  }
+
+  public static shouldCaptureInTextInput(keyText: string, keyCode: number): boolean {
+    const normalized = KeyboardMapper.normalizeKeyText(keyText);
+    if (KeyboardMapper.mapHarmonyKeyCode(keyCode) === 0) {
+      return normalized === 'ContextMenu';
+    }
+
+    switch (normalized) {
+      case 'Tab':
+      case 'Escape':
+      case 'Backspace':
+      case 'Del':
+      case 'ArrowLeft':
+      case 'ArrowRight':
+      case 'ArrowUp':
+      case 'ArrowDown':
+      case 'Delete':
+      case 'Insert':
+      case 'Home':
+      case 'End':
+      case 'PageUp':
+      case 'PageDown':
+      case 'Shift':
+      case 'Control':
+      case 'Alt':
+      case 'Meta':
+      case 'CapsLock':
+      case 'NumLock':
+      case 'ScrollLock':
+      case 'PrintScreen':
+      case 'Pause':
+      case 'ContextMenu':
+        return true;
+      default:
+        return keyCode >= KeyCode.KEYCODE_F1 && keyCode <= KeyCode.KEYCODE_F12;
+    }
+  }
+
+  public static mapKeyScancode(keyText: string, keyCode: number): number {
+    if (keyText === 'Del') {
+      if (keyCode === KeyCode.KEYCODE_FORWARD_DEL) {
+        return KeyboardMapper.RDP_SCANCODE_DELETE;
+      }
+      if (keyCode === KeyCode.KEYCODE_DEL) {
+        return KeyboardMapper.RDP_SCANCODE_BACKSPACE;
+      }
+    }
+
+    const normalized = KeyboardMapper.normalizeKeyText(keyText);
+    const namedScancode = KeyboardMapper.mapNamedKeyScancode(normalized);
+    if (namedScancode > 0) {
+      return namedScancode;
+    }
+
+    const printableScancode = KeyboardMapper.mapPrintableScancode(normalized);
+    if (printableScancode > 0) {
+      return printableScancode;
+    }
+
+    return KeyboardMapper.mapHarmonyKeyCode(keyCode);
   }
 }
