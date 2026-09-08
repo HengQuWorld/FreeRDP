@@ -1190,6 +1190,7 @@ export struct RemoteDesktopSurface {
           .backgroundColor(Color.Transparent)
           .position({ x: -100, y: -100 })
           .focusOnTouch(false)
+          .enableKeyboardOnFocus(false)
           .onFocus(() => {
             this.softInputFocused = true;
           })
