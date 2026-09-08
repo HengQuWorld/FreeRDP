@@ -88,17 +88,58 @@ detect_native_changes() {
       git -C "${repo_root}" diff --name-only HEAD -- \
         client/Harmony/cmake \
         client/Harmony/native \
-        client/Harmony/entry/src/main/cpp 2>/dev/null || true
+        client/Harmony/entry/src/main/cpp \
+        channels \
+        libfreerdp \
+        winpr \
+        include \
+        cmake 2>/dev/null || true
       git -C "${repo_root}" ls-files --others --exclude-standard -- \
         client/Harmony/cmake \
         client/Harmony/native \
-        client/Harmony/entry/src/main/cpp 2>/dev/null || true
+        client/Harmony/entry/src/main/cpp \
+        channels \
+        libfreerdp \
+        winpr \
+        include \
+        cmake 2>/dev/null || true
     } | awk 'NF && !seen[$0]++'
   )"
 
   if [[ -n "${changes}" ]]; then
     printf '%s\n' "${changes}"
   fi
+}
+
+freerdp_cache_dir() {
+  local repo_root
+  repo_root="$(cd "${PROJECT_DIR}/../.." && pwd)"
+  printf '%s/cache/build/freerdp\n' "${repo_root}"
+}
+
+clean_freerdp_cache() {
+  local cache_dir
+  cache_dir="$(freerdp_cache_dir)"
+
+  if [[ -d "${cache_dir}" ]]; then
+    log "Removing FreeRDP persistent cache: ${cache_dir}"
+    rm -rf "${cache_dir}"
+  fi
+}
+
+has_freerdp_source_changes() {
+  local native_changes="$1"
+
+  if [[ -z "${native_changes}" ]]; then
+    return 1
+  fi
+
+  # Check if any changed file is in FreeRDP source directories
+  if printf '%s\n' "${native_changes}" | grep -qE '^(channels|libfreerdp|winpr|include|cmake)/'; then
+    return 0
+  fi
+
+  return 1
 }
 
 clean_bridge_only() {
@@ -130,7 +171,7 @@ clean_bridge_only() {
 
 clean_full() {
   log "Performing full clean"
-  
+
   local sdk_dir
   local hvigor_bin
 
@@ -143,7 +184,9 @@ clean_full() {
       DEVECO_SDK_HOME="${sdk_dir}" \
       "${hvigor_bin}" clean
   )
-  
+
+  clean_freerdp_cache
+
   log "Full clean completed"
 }
 
@@ -165,8 +208,11 @@ build() {
   echo "${mode}" > "${mode_file}"
   trap "rm -f '${mode_file}'" RETURN
 
+  local force_rebuild_freerdp="${FORCE_REBUILD_FREERDP:-0}"
+
   if [[ "${force_clean}" == "true" ]]; then
     clean_full
+    force_rebuild_freerdp=1
   else
     local native_changes
     native_changes="$(detect_native_changes)"
@@ -174,7 +220,14 @@ build() {
     if [[ -n "${native_changes}" ]]; then
       log "Native/CMake changes detected:"
       printf '%s\n' "${native_changes}"
-      clean_bridge_only
+
+      if has_freerdp_source_changes "${native_changes}"; then
+        log "FreeRDP source changes detected, clearing persistent cache"
+        clean_freerdp_cache
+        force_rebuild_freerdp=1
+      else
+        clean_bridge_only
+      fi
     fi
   fi
 
@@ -183,6 +236,7 @@ build() {
     cd "${PROJECT_DIR}"
     env -u DEVECO_SDK_HOME -u HOS_SDK_HOME -u OHOS_SDK_HOME -u OHOS_BASE_SDK_HOME \
       DEVECO_SDK_HOME="${sdk_dir}" \
+      FORCE_REBUILD_FREERDP="${force_rebuild_freerdp}" \
       "${hvigor_bin}" assembleApp -p product=default -p buildMode="${mode}"
   )
 
