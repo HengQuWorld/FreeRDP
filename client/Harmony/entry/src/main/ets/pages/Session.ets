@@ -157,7 +157,11 @@ struct Session {
     if (record === undefined) {
       const ctx = this.getUIContext()?.getHostContext?.() as common.UIAbilityContext | undefined;
       if (ctx) {
-        void ctx.terminateSelf();
+        try {
+          void ctx.terminateSelf();
+        } catch (_e) {
+          // context may already be destroyed; nothing to do
+        }
       }
       return;
     }

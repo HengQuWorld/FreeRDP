@@ -1724,6 +1724,12 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
     args.emplace_back("/home-drive");
   }
 
+  for (const auto& entry : config_.driveRedirections) {
+    if (!entry.name.empty() && !entry.path.empty()) {
+      args.emplace_back("/drive:" + entry.name + "," + entry.path);
+    }
+  }
+
   args.emplace_back("/kbd:unicode:on");
 
   return args;

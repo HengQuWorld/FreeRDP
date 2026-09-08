@@ -987,6 +987,10 @@ struct Index {
             onGatewayDomainChange: (value: string) => this.homeViewModel.updateGatewayDomain(value),
             onClipboardChange: (value: boolean) => this.homeViewModel.toggleClipboard(value),
             onResolutionChange: (width: number, height: number) => this.homeViewModel.updateResolution(width, height),
+            onAddDriveRedirection: (name: string, path: string) => this.homeViewModel.addDriveRedirection(name, path),
+            onUpdateDriveRedirection: (index: number, name: string, path: string) =>
+              this.homeViewModel.updateDriveRedirection(index, name, path),
+            onRemoveDriveRedirection: (index: number) => this.homeViewModel.removeDriveRedirection(index),
             onNew: () => { this.homeViewModel.createNewProfile(); this.selectedConnId = ''; },
             onSave: () => { 
               void (async () => {

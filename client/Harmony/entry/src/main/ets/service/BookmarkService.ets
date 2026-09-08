@@ -1,6 +1,7 @@
 import dataPreferences from '@ohos.data.preferences';
 import common from '@ohos.app.ability.common';
-import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
+import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, DriveRedirection, normalizeDriveRedirections, copyDriveRedirections } from '../model/ConnectionProfile';
+import { logger, LogTags } from '../utils/Logger';
 
 export class BookmarkService {
   private static readonly PREFERENCES_NAME: string = 'freerdp_store';
@@ -34,7 +35,7 @@ export class BookmarkService {
   }
 
   async saveDraft(context: common.UIAbilityContext, profile: ConnectionProfile): Promise<void> {
-    await this.writeStorage(context, BookmarkService.DRAFT_KEY, this.serializeProfile(this.sanitizeProfile(profile)));
+    await this.writeStorage(context, BookmarkService.DRAFT_KEY, this.serializeProfile(this.sanitizeProfile(profile), false));
   }
 
   private sanitizeProfile(profile: ConnectionProfile): ConnectionProfile {
@@ -68,7 +69,7 @@ export class BookmarkService {
   }
 
   private async writeBookmarks(context: common.UIAbilityContext, bookmarks: ConnectionProfile[]): Promise<void> {
-    const lines: string[] = bookmarks.map((item: ConnectionProfile) => this.serializeProfile(item));
+    const lines: string[] = bookmarks.map((item: ConnectionProfile) => this.serializeProfile(item, true));
     await this.writeStorage(context, BookmarkService.BOOKMARKS_KEY, lines.join('\n'));
   }
 
@@ -99,7 +100,8 @@ export class BookmarkService {
       const pref = await dataPreferences.getPreferences(context, { name: BookmarkService.PREFERENCES_NAME });
       await pref.put(key, value);
       await pref.flush();
-    } catch (_error) {
+    } catch (e) {
+      logger.error(LogTags.BOOKMARK_SERVICE, `writeStorage failed for key=${key}`, e);
     }
   }
 
@@ -111,7 +113,16 @@ export class BookmarkService {
     return decodeURIComponent(value);
   }
 
-  private serializeProfile(profile: ConnectionProfile): string {
+  /**
+   * 统一序列化 profile。
+   *
+   * - 书签保存：normalizeDriveRedirections=true，落盘前规整 drive 条目
+   * - 草稿保存：normalizeDriveRedirections=false，保留用户编辑中的半填状态
+   */
+  private serializeProfile(profile: ConnectionProfile, normalizeDrives: boolean): string {
+    const drivesPayload: string = this.serializeDriveRedirections(profile.driveRedirections, normalizeDrives);
+    logger.info(LogTags.BOOKMARK_SERVICE,
+      `serializeProfile: driveCount=${copyDriveRedirections(profile.driveRedirections).length}, normalizeDrives=${normalizeDrives}`);
     const parts: string[] = [
       this.encode(profile.id),
       this.encode(profile.name),
@@ -133,27 +144,64 @@ export class BookmarkService {
       this.encode(profile.appDataDir),
       profile.enableGfx ? '1' : '0',
       profile.desktopWidth.toString(),
-      profile.desktopHeight.toString()
+      profile.desktopHeight.toString(),
+      drivesPayload
     ];
     return parts.join('|');
+  }
+
+  private serializeDriveRedirections(drives: DriveRedirection[], normalizeBeforeSave: boolean): string {
+    const serialized: DriveRedirection[] = normalizeBeforeSave
+      ? normalizeDriveRedirections(drives)
+      : copyDriveRedirections(drives);
+    if (serialized.length === 0) {
+      return '';
+    }
+    return serialized.map((item: DriveRedirection): string => {
+      return this.encode(item.name) + ',' + this.encode(item.path);
+    }).join(';');
+  }
+
+  private deserializeDriveRedirections(payload: string): DriveRedirection[] {
+    if (payload.length === 0) {
+      return [];
+    }
+    const entries: string[] = payload.split(';');
+    const result: DriveRedirection[] = [];
+    let index: number = 0;
+    while (index < entries.length) {
+      const entry: string = entries[index];
+      if (entry.length > 0) {
+        const commaIndex: number = entry.indexOf(',');
+        if (commaIndex >= 0) {
+          const name: string = this.decode(entry.substring(0, commaIndex));
+          const path: string = this.decode(entry.substring(commaIndex + 1));
+          // 反序列化草稿时保留用户编辑中的半填状态，避免应用重启后条目丢失。
+          const item: DriveRedirection = { name: name, path: path };
+          result.push(item);
+        }
+      }
+      index += 1;
+    }
+    return result;
   }
 
   private deserializeProfile(payload: string): ConnectionProfile | null {
     const parts: string[] = payload.split('|');
     if (parts.length !== 11 && parts.length !== 12 && parts.length !== 14 &&
         parts.length !== 15 && parts.length !== 17 && parts.length !== 18 &&
-        parts.length !== 19 && parts.length !== 21) {
+        parts.length !== 19 && parts.length !== 21 && parts.length !== 22) {
       return null;
     }
 
     const portNumber: number = Number(parts[3]);
     const hasClientHostname: boolean = parts.length === 14 || parts.length === 15 ||
       parts.length === 17 || parts.length === 18 || parts.length === 19 ||
-      parts.length === 21;
+      parts.length === 21 || parts.length === 22;
     const hasRememberPassword: boolean = parts.length === 12 || parts.length === 15 ||
-      parts.length === 18 || parts.length === 19 || parts.length === 21;
+      parts.length === 18 || parts.length === 19 || parts.length === 21 || parts.length === 22;
     const isGatewayExtendedFormat: boolean = parts.length === 17 || parts.length === 18 ||
-      parts.length === 19 || parts.length === 21;
+      parts.length === 19 || parts.length === 21 || parts.length === 22;
     const isExtendedFormat: boolean = parts.length === 14 || parts.length === 15 ||
       isGatewayExtendedFormat;
     const clientHostnameIndex: number = hasClientHostname ? 4 : -1;
@@ -179,9 +227,15 @@ export class BookmarkService {
       ? parts[rememberPasswordIndex] === '1'
       : this.decode(parts[passwordIndex]).length > 0;
     const password: string = rememberPassword ? this.decode(parts[passwordIndex]) : '';
-    const hasResolution: boolean = parts.length === 21;
+    const hasResolution: boolean = parts.length === 21 || parts.length === 22;
     const desktopWidth: number = hasResolution ? Number(parts[19]) : DEFAULT_DESKTOP_WIDTH;
     const desktopHeight: number = hasResolution ? Number(parts[20]) : DEFAULT_DESKTOP_HEIGHT;
+    const hasDriveRedirections: boolean = parts.length === 22;
+    const driveRedirections: DriveRedirection[] = hasDriveRedirections
+      ? this.deserializeDriveRedirections(parts[21])
+      : [];
+    logger.info(LogTags.BOOKMARK_SERVICE,
+      `deserializeProfile: parts=${parts.length}, hasDrives=${hasDriveRedirections}, driveCount=${driveRedirections.length}`);
     return {
       id: this.decode(parts[0]),
       name: this.decode(parts[1]),
@@ -201,9 +255,10 @@ export class BookmarkService {
       enableClipboard: parts[clipboardIndex] === '1',
       enableAudio: parts[audioIndex] === '1',
       enableDrive: parts[driveIndex] === '1',
-      enableGfx: parts.length === 19 || parts.length === 21 ? parts[18] === '1' : false,
+      enableGfx: parts.length === 19 || parts.length === 21 || parts.length === 22 ? parts[18] === '1' : false,
       desktopWidth: Number.isFinite(desktopWidth) && desktopWidth > 0 ? desktopWidth : DEFAULT_DESKTOP_WIDTH,
-      desktopHeight: Number.isFinite(desktopHeight) && desktopHeight > 0 ? desktopHeight : DEFAULT_DESKTOP_HEIGHT
+      desktopHeight: Number.isFinite(desktopHeight) && desktopHeight > 0 ? desktopHeight : DEFAULT_DESKTOP_HEIGHT,
+      driveRedirections: driveRedirections
     };
   }
 }

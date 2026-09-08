@@ -10,6 +10,11 @@
 
 class FreeRDPHarmonySession;
 
+struct HarmonyDriveRedirection {
+  std::string name;
+  std::string path;
+};
+
 struct HarmonySessionConfig {
   std::string name;
   std::string host;
@@ -31,6 +36,7 @@ struct HarmonySessionConfig {
   bool enableGfx;
   std::uint32_t desktopWidth;
   std::uint32_t desktopHeight;
+  std::vector<HarmonyDriveRedirection> driveRedirections;
 };
 
 struct HarmonySurfaceSnapshot {

@@ -8,6 +8,11 @@
 extern "C" {
 #endif
 
+typedef struct HarmonyDriveRedirectionC {
+  const char* name;
+  const char* path;
+} HarmonyDriveRedirectionC;
+
 typedef struct HarmonySessionConfigC {
   const char* name;
   const char* host;
@@ -29,6 +34,8 @@ typedef struct HarmonySessionConfigC {
   uint8_t enableGfx;
   uint32_t desktopWidth;
   uint32_t desktopHeight;
+  const HarmonyDriveRedirectionC* driveRedirections;
+  size_t driveRedirectionCount;
 } HarmonySessionConfigC;
 
 typedef struct HarmonySurfaceSnapshotC {

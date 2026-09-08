@@ -181,6 +181,32 @@ bool GetNamedBool(napi_env env, napi_value object, const char* name, bool* out) 
   return napi_get_value_bool(env, property, out) == napi_ok;
 }
 
+bool GetNamedObjectArray(napi_env env, napi_value object, const char* name, napi_value* out,
+                         uint32_t* count) {
+  napi_value property = nullptr;
+  if (!GetNamedProperty(env, object, name, &property)) {
+    return false;
+  }
+  bool isArray = false;
+  if ((napi_is_array(env, property, &isArray) != napi_ok) || !isArray) {
+    return false;
+  }
+  if (napi_get_array_length(env, property, count) != napi_ok) {
+    return false;
+  }
+  *out = property;
+  return true;
+}
+
+bool GetStringFromArrayElement(napi_env env, napi_value array, uint32_t index, const char* fieldName,
+                               std::string* out) {
+  napi_value element = nullptr;
+  if (napi_get_element(env, array, index, &element) != napi_ok) {
+    return false;
+  }
+  return GetNamedString(env, element, fieldName, out);
+}
+
 bool GetInt32Arg(napi_env env, napi_callback_info info, std::int32_t* out) {
   size_t argc = 1;
   napi_value argv[1] = { nullptr };
@@ -364,6 +390,25 @@ napi_value CreateSessionNapi(napi_env env, napi_callback_info info) {
   GetNamedUint32(env, argv[0], "desktopWidth", &config.desktopWidth);
   GetNamedUint32(env, argv[0], "desktopHeight", &config.desktopHeight);
 
+  config.driveRedirections.clear();
+  napi_value drivesArray = nullptr;
+  uint32_t drivesCount = 0;
+  if (GetNamedObjectArray(env, argv[0], "driveRedirections", &drivesArray, &drivesCount)) {
+    for (uint32_t index = 0; index < drivesCount; index++) {
+      HarmonyDriveRedirection entry;
+      if (GetStringFromArrayElement(env, drivesArray, index, "name", &entry.name) &&
+          GetStringFromArrayElement(env, drivesArray, index, "path", &entry.path)) {
+        config.driveRedirections.push_back(std::move(entry));
+      }
+    }
+  }
+
+  std::vector<HarmonyDriveRedirectionC> drivesC;
+  drivesC.reserve(config.driveRedirections.size());
+  for (const auto& entry : config.driveRedirections) {
+    drivesC.push_back({ entry.name.c_str(), entry.path.c_str() });
+  }
+
   const HarmonySessionConfigC configC = {
     config.name.c_str(),
     config.host.c_str(),
@@ -384,7 +429,9 @@ napi_value CreateSessionNapi(napi_env env, napi_callback_info info) {
     static_cast<std::uint8_t>(config.ignoreCertificate ? 1U : 0U),
     static_cast<std::uint8_t>(config.enableGfx ? 1U : 0U),
     config.desktopWidth,
-    config.desktopHeight
+    config.desktopHeight,
+    drivesC.empty() ? nullptr : drivesC.data(),
+    drivesC.size()
   };
 
   napi_value result = nullptr;
@@ -798,6 +845,15 @@ int harmony_session_create(const HarmonySessionConfigC* config) {
   cppConfig.enableGfx = config->enableGfx != 0;
   cppConfig.desktopWidth = config->desktopWidth;
   cppConfig.desktopHeight = config->desktopHeight;
+  for (size_t index = 0; index < config->driveRedirectionCount; index++) {
+    const HarmonyDriveRedirectionC& entry = config->driveRedirections[index];
+    HarmonyDriveRedirection cppEntry;
+    cppEntry.name = ToString(entry.name);
+    cppEntry.path = ToString(entry.path);
+    if (!cppEntry.name.empty() && !cppEntry.path.empty()) {
+      cppConfig.driveRedirections.push_back(std::move(cppEntry));
+    }
+  }
   return Adapter().CreateSession(cppConfig);
 }
 

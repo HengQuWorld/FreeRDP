@@ -1,7 +1,9 @@
-import { ConnectionProfile } from '../model/ConnectionProfile';
+import { ConnectionProfile, DriveRedirection, deriveDriveName } from '../model/ConnectionProfile';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 import { showKeyboardForField } from '../utils/KeyboardHelper';
+import { FolderPicker, FolderPickResult } from '../utils/FolderPicker';
+import { common } from '@kit.AbilityKit';
 
 interface ResolutionPreset {
   label: string;
@@ -26,6 +28,7 @@ export struct ConnectionForm {
   @State colors: ThemeColors = LightColors;
   @State gatewayExpanded: boolean = false;
   @State resolutionExpanded: boolean = false;
+  @State driveExpanded: boolean = false;
   @State connectionName: string = '';
   @State hostAddress: string = '';
   @State portNumber: string = '3389';
@@ -36,6 +39,13 @@ export struct ConnectionForm {
   @State gatewayUserName: string = '';
   @State gatewayPasswordValue: string = '';
   @State gatewayDomainName: string = '';
+  @State newDriveName: string = '';
+  @State newDrivePath: string = '';
+  @State driveSelectHint: string = '';
+  @State driveRedirections: DriveRedirection[] = [];
+  // 仅在"程序化"修改列表（选择目录、删除、外部同步）时自增，
+  // 用于强制 ForEach 重建行；用户手动输入时不变化，避免输入光标跳动。
+  @State driveListVersion: number = 0;
   onNameChange: (value: string) => void = (_value: string): void => {};
   onHostChange: (value: string) => void = (_value: string): void => {};
   onPortChange: (value: string) => void = (_value: string): void => {};
@@ -49,6 +59,10 @@ export struct ConnectionForm {
   onGatewayDomainChange: (value: string) => void = (_value: string): void => {};
   onClipboardChange: (value: boolean) => void = (_value: boolean): void => {};
   onResolutionChange: (width: number, height: number) => void = (_w: number, _h: number): void => {};
+  onAddDriveRedirection: (name: string, path: string) => void = (_n: string, _p: string): void => {};
+  onUpdateDriveRedirection: (index: number, name: string, path: string) => void
+    = (_i: number, _n: string, _p: string): void => {};
+  onRemoveDriveRedirection: (index: number) => void = (_i: number): void => {};
   onNew: () => void = (): void => {};
   onSave: () => void = (): void => {};
   onConnect: () => void = (): void => {};
@@ -89,6 +103,7 @@ export struct ConnectionForm {
     if (this.gatewayDomainName !== this.profile.gatewayDomain) {
       this.gatewayDomainName = this.profile.gatewayDomain;
     }
+    this.syncDriveRedirections();
   }
 
   aboutToAppear(): void {
@@ -107,11 +122,187 @@ export struct ConnectionForm {
     this.gatewayUserName = this.profile.gatewayUsername;
     this.gatewayPasswordValue = this.profile.gatewayPassword;
     this.gatewayDomainName = this.profile.gatewayDomain;
+    this.syncDriveRedirections();
+  }
+
+  private syncDriveRedirections(): void {
+    const profileDrives: DriveRedirection[] = this.profile.driveRedirections;
+    if (this.driveRedirections.length === profileDrives.length) {
+      let same: boolean = true;
+      let i: number = 0;
+      while (i < this.driveRedirections.length) {
+        if (this.driveRedirections[i].name !== profileDrives[i].name ||
+            this.driveRedirections[i].path !== profileDrives[i].path) {
+          same = false;
+          break;
+        }
+        i++;
+      }
+      if (same) {
+        return;
+      }
+    }
+    const next: DriveRedirection[] = profileDrives.map((item: DriveRedirection): DriveRedirection => {
+      return { name: item.name, path: item.path };
+    });
+    this.driveRedirections = next;
+    this.driveListVersion += 1;
+  }
+
+  private updateLocalDriveRedirectionName(index: number, name: string): void {
+    const drives: DriveRedirection[] = this.driveRedirections.map((item: DriveRedirection, idx: number): DriveRedirection => {
+      if (idx === index) {
+        return { name: name, path: item.path };
+      }
+      return { name: item.name, path: item.path };
+    });
+    this.driveRedirections = drives;
+  }
+
+  private updateLocalDriveRedirectionPath(index: number, path: string): void {
+    const drives: DriveRedirection[] = this.driveRedirections.map((item: DriveRedirection, idx: number): DriveRedirection => {
+      if (idx === index) {
+        return { name: item.name, path: path };
+      }
+      return { name: item.name, path: item.path };
+    });
+    this.driveRedirections = drives;
+  }
+
+  private removeLocalDriveRedirection(index: number): void {
+    const drives: DriveRedirection[] = [];
+    let idx: number = 0;
+    while (idx < this.driveRedirections.length) {
+      if (idx !== index) {
+        const item: DriveRedirection = this.driveRedirections[idx];
+        drives.push(item);
+      }
+      idx += 1;
+    }
+    this.driveRedirections = drives;
+    this.driveListVersion += 1;
   }
 
   private hasGatewayConfig(): boolean {
     return !!(this.profile.gateway || this.profile.gatewayUsername ||
       this.profile.gatewayPassword || this.profile.gatewayDomain);
+  }
+
+  private hasDriveRedirectionConfig(): boolean {
+    return this.driveRedirections.length > 0;
+  }
+
+  private getDriveRedirectionCountLabel(): string {
+    const count: number = this.driveRedirections.length;
+    if (count === 0) {
+      return i18n.get(this.appLanguage, 'drive_redirection_empty');
+    }
+    if (count === 1) {
+      return i18n.get(this.appLanguage, 'drive_redirection_configured_one');
+    }
+    return i18n.get(this.appLanguage, 'drive_redirection_configured').replace('N', `${count}`);
+  }
+
+  /**
+   * 提交"新增条目"输入框中的内容。
+   *
+   * 只要填写了路径即可提交，盘符名为空时按目录名兜底，
+   * 避免用户仅选择目录、未填名称时点击添加无任何反应。
+   *
+   * @returns 是否成功提交了一条新的重定向目录
+   */
+  private addNewDriveEntry(): boolean {
+    const trimmedPath: string = this.newDrivePath.trim();
+    if (trimmedPath.length === 0) {
+      return false;
+    }
+    const trimmedName: string = this.newDriveName.trim().length > 0
+      ? this.newDriveName.trim()
+      : deriveDriveName(trimmedPath);
+    if (trimmedName.length === 0) {
+      return false;
+    }
+    this.onAddDriveRedirection(trimmedName, trimmedPath);
+    const entry: DriveRedirection = { name: trimmedName, path: trimmedPath };
+    this.driveRedirections = [...this.driveRedirections, entry];
+    this.driveListVersion += 1;
+    this.newDriveName = '';
+    this.newDrivePath = '';
+    this.driveSelectHint = '';
+    return true;
+  }
+
+  /**
+   * 点击"保存配置"时先落盘尚未点击"添加文件夹"的待提交目录，
+   * 再执行真正的保存，避免用户选完目录直接保存导致配置丢失。
+   */
+  private handleSave(): void {
+    this.addNewDriveEntry();
+    this.onSave();
+  }
+
+  private getHostContext(): common.UIAbilityContext | null {
+    try {
+      return this.getUIContext().getHostContext() as common.UIAbilityContext;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 拉起系统目录选择器，为"新增条目"选择本地文件夹。
+   * 选中后自动填充路径，并从路径末段生成默认盘符名（若名称为空）。
+   */
+  private async pickNewDriveFolder(): Promise<void> {
+    const ctx: common.UIAbilityContext | null = this.getHostContext();
+    if (ctx === null) {
+      this.driveSelectHint = i18n.get(this.appLanguage, 'drive_redirection_select_failed');
+      return;
+    }
+    const result: FolderPickResult | null = await FolderPicker.pickFolder(ctx);
+    if (result === null) {
+      // 用户取消或设备不支持；若路径仍为空则提示手动输入
+      if (this.newDrivePath.trim().length === 0) {
+        this.driveSelectHint = i18n.get(this.appLanguage, 'drive_redirection_select_failed');
+      }
+      return;
+    }
+    this.newDrivePath = result.path;
+    if (this.newDriveName.trim().length === 0 && result.name.length > 0) {
+      this.newDriveName = result.name;
+    }
+    this.driveSelectHint = '';
+  }
+
+  /**
+   * 拉起系统目录选择器，为"已有条目"更新本地文件夹路径。
+   */
+  private async pickExistingDriveFolder(index: number): Promise<void> {
+    if (index < 0 || index >= this.driveRedirections.length) {
+      return;
+    }
+    const ctx: common.UIAbilityContext | null = this.getHostContext();
+    if (ctx === null) {
+      this.driveSelectHint = i18n.get(this.appLanguage, 'drive_redirection_select_failed');
+      return;
+    }
+    const expectedVersion: number = this.driveListVersion;
+    const result: FolderPickResult | null = await FolderPicker.pickFolder(ctx);
+    if (result === null) {
+      return;
+    }
+    if (expectedVersion !== this.driveListVersion ||
+        index < 0 || index >= this.driveRedirections.length) {
+      return;
+    }
+    const entry: DriveRedirection = this.driveRedirections[index];
+    const nextName: string = entry.name.trim().length > 0 ? entry.name : result.name;
+    this.onUpdateDriveRedirection(index, nextName, result.path);
+    this.updateLocalDriveRedirectionName(index, nextName);
+    this.updateLocalDriveRedirectionPath(index, result.path);
+    // 目录选择属于程序化更新，需要强制刷新输入框显示
+    this.driveListVersion += 1;
+    this.driveSelectHint = '';
   }
 
   private getCurrentResolutionLabel(): string {
@@ -432,6 +623,198 @@ export struct ConnectionForm {
       Column({ space: 0 }) {
         Row() {
           Row({ space: 10 }) {
+            Text(this.driveExpanded ? '▾' : '▸')
+              .fontSize(14)
+              .fontColor(this.colors.primary);
+            Text(i18n.get(this.appLanguage, 'drive_redirection_settings'))
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.colors.foreground);
+          }
+          .onClick(() => { this.driveExpanded = !this.driveExpanded; })
+          Blank()
+          Text(this.getDriveRedirectionCountLabel())
+            .fontSize(13)
+            .fontColor(this.hasDriveRedirectionConfig() ? this.colors.connectedGreen : this.colors.mutedForeground)
+            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+            .backgroundColor(this.colors.tagBackground)
+            .borderRadius(999)
+        }
+        .width('100%')
+        .padding(16)
+        .onClick(() => { this.driveExpanded = !this.driveExpanded; });
+
+        if (this.driveExpanded) {
+          Column({ space: 14 }) {
+            Text(i18n.get(this.appLanguage, 'drive_redirection_hint'))
+              .fontSize(13)
+              .fontColor(this.colors.mutedForeground)
+              .lineHeight(20)
+              .padding({ left: 4, right: 4 })
+
+            if (this.driveRedirections.length > 0) {
+              ForEach(this.driveRedirections, (entry: DriveRedirection, index: number) => {
+                Column({ space: 8 }) {
+                  Row({ space: 8 }) {
+                    TextInput({ placeholder: i18n.get(this.appLanguage, 'drive_redirection_name_placeholder'), text: entry.name })
+                      .backgroundColor(this.colors.inputBackground)
+                      .borderRadius(10)
+                      .border({ width: 1, color: this.colors.inputBorder })
+                      .fontSize(15)
+                      .height(46)
+                      .padding({ left: 14, right: 14 })
+                      .placeholderColor(this.colors.mutedForeground)
+                      .fontColor(this.colors.foreground)
+                      .layoutWeight(1)
+                      .focusOnTouch(false)
+                      .id(`connectionForm_drive_name_${index}`)
+                      .onClick(() => {
+                        showKeyboardForField(this.getUIContext(), `connectionForm_drive_name_${index}`);
+                      })
+                      .onChange((v: string) => {
+                        this.onUpdateDriveRedirection(index, v, entry.path);
+                        this.updateLocalDriveRedirectionName(index, v);
+                      });
+
+                    Button(i18n.get(this.appLanguage, 'drive_redirection_remove'))
+                      .type(ButtonType.Normal)
+                      .fontSize(13)
+                      .height(46)
+                      .backgroundColor('rgba(185,28,28,0.08)')
+                      .fontColor(this.colors.destructive)
+                      .borderRadius(10)
+                      .padding({ left: 14, right: 14 })
+                      .onClick(() => {
+                        this.onRemoveDriveRedirection(index);
+                        this.removeLocalDriveRedirection(index);
+                      })
+                  }
+                  .width('100%')
+
+                  Row({ space: 8 }) {
+                    TextInput({ placeholder: i18n.get(this.appLanguage, 'drive_redirection_path_placeholder'), text: entry.path })
+                      .backgroundColor(this.colors.inputBackground)
+                      .borderRadius(10)
+                      .border({ width: 1, color: this.colors.inputBorder })
+                      .fontSize(15)
+                      .height(46)
+                      .padding({ left: 14, right: 14 })
+                      .placeholderColor(this.colors.mutedForeground)
+                      .fontColor(this.colors.foreground)
+                      .focusOnTouch(false)
+                      .layoutWeight(1)
+                      .id(`connectionForm_drive_path_${index}`)
+                      .onClick(() => {
+                        showKeyboardForField(this.getUIContext(), `connectionForm_drive_path_${index}`);
+                      })
+                      .onChange((v: string) => {
+                        this.onUpdateDriveRedirection(index, entry.name, v);
+                        this.updateLocalDriveRedirectionPath(index, v);
+                      });
+
+                    Button(i18n.get(this.appLanguage, 'drive_redirection_select_folder'))
+                      .type(ButtonType.Normal)
+                      .fontSize(13)
+                      .height(46)
+                      .backgroundColor(this.colors.inputBackground)
+                      .fontColor(this.colors.primary)
+                      .borderRadius(10)
+                      .padding({ left: 14, right: 14 })
+                      .onClick(() => this.pickExistingDriveFolder(index))
+                  }
+                  .width('100%')
+                }
+                .width('100%')
+                .padding(14)
+                .backgroundColor(this.colors.muted)
+                .borderRadius(12)
+              }, (entry: DriveRedirection, index: number) => `drive-${index}-${this.driveListVersion}`)
+            }
+
+            Column({ space: 8 }) {
+              Row({ space: 8 }) {
+                TextInput({ placeholder: i18n.get(this.appLanguage, 'drive_redirection_name_placeholder'), text: $$this.newDriveName })
+                  .backgroundColor(this.colors.inputBackground)
+                  .borderRadius(10)
+                  .border({ width: 1, color: this.colors.inputBorder })
+                  .fontSize(15)
+                  .height(46)
+                  .padding({ left: 14, right: 14 })
+                  .placeholderColor(this.colors.mutedForeground)
+                  .fontColor(this.colors.foreground)
+                  .layoutWeight(1)
+                  .focusOnTouch(false)
+                  .id('connectionForm_drive_new_name')
+                  .onClick(() => {
+                    showKeyboardForField(this.getUIContext(), 'connectionForm_drive_new_name');
+                  })
+                  .onChange((v: string) => { this.newDriveName = v; });
+
+                Button(i18n.get(this.appLanguage, 'drive_redirection_add'))
+                  .type(ButtonType.Normal)
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .height(46)
+                  .backgroundColor(this.colors.primary)
+                  .fontColor(this.colors.primaryForeground)
+                  .borderRadius(10)
+                  .padding({ left: 16, right: 16 })
+                  .onClick(() => this.addNewDriveEntry())
+              }
+              .width('100%')
+
+              Row({ space: 8 }) {
+                TextInput({ placeholder: i18n.get(this.appLanguage, 'drive_redirection_path_placeholder'), text: $$this.newDrivePath })
+                  .backgroundColor(this.colors.inputBackground)
+                  .borderRadius(10)
+                  .border({ width: 1, color: this.colors.inputBorder })
+                  .fontSize(15)
+                  .height(46)
+                  .padding({ left: 14, right: 14 })
+                  .placeholderColor(this.colors.mutedForeground)
+                  .fontColor(this.colors.foreground)
+                  .focusOnTouch(false)
+                  .layoutWeight(1)
+                  .id('connectionForm_drive_new_path')
+                  .onClick(() => {
+                    showKeyboardForField(this.getUIContext(), 'connectionForm_drive_new_path');
+                  })
+                  .onChange((v: string) => { this.newDrivePath = v; });
+
+                Button(i18n.get(this.appLanguage, 'drive_redirection_select_folder'))
+                  .type(ButtonType.Normal)
+                  .fontSize(13)
+                  .height(46)
+                  .backgroundColor(this.colors.inputBackground)
+                  .fontColor(this.colors.primary)
+                  .borderRadius(10)
+                  .padding({ left: 14, right: 14 })
+                  .onClick(() => this.pickNewDriveFolder())
+              }
+              .width('100%')
+
+              if (this.driveSelectHint.length > 0) {
+                Text(this.driveSelectHint)
+                  .fontSize(12)
+                  .fontColor(this.colors.mutedForeground)
+                  .padding({ left: 4, right: 4 })
+              }
+            }
+            .width('100%')
+          }
+          .width('100%')
+          .padding({ top: 4, bottom: 16 })
+          .animation({ duration: 200, curve: Curve.EaseInOut })
+        }
+      }
+      .width('100%')
+      .backgroundColor(this.colors.surfaceElevated)
+      .border({ width: 1, color: this.colors.surfaceElevatedBorder })
+      .borderRadius(16)
+
+      Column({ space: 0 }) {
+        Row() {
+          Row({ space: 10 }) {
             Text(this.resolutionExpanded ? '▾' : '▸')
               .fontSize(14)
               .fontColor(this.colors.primary);
@@ -496,7 +879,7 @@ export struct ConnectionForm {
           .backgroundColor(this.colors.muted)
           .fontColor(this.colors.foreground)
           .borderRadius(14)
-          .onClick(() => this.onSave())
+          .onClick(() => this.handleSave())
 
         Button(i18n.get(this.appLanguage, 'connect_desktop'))
           .layoutWeight(2)
@@ -508,7 +891,11 @@ export struct ConnectionForm {
           .fontColor(this.canConnect ? this.colors.primaryForeground : this.colors.mutedForeground)
           .borderRadius(14)
           .enabled(this.canConnect)
-          .onClick(() => this.onConnect())
+          .onClick(() => {
+            // 连接前同样提交待添加的目录，确保本次会话就能用上刚选择的文件夹
+            this.addNewDriveEntry();
+            this.onConnect();
+          })
       }
       .width('100%')
     }

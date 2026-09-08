@@ -22,9 +22,10 @@ import {
   NativeSessionConfig,
   NativeSessionEvent,
   NativeSessionInfo,
-  NativeSessionSnapshot
+  NativeSessionSnapshot,
+  NativeDriveRedirection
 } from 'libfreerdp_harmony_bridge.so';
-import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
+import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, DriveRedirection, normalizeDriveRedirections } from '../model/ConnectionProfile';
 import { SessionEvent, SessionEventType, SessionSnapshot, SessionStage, SessionState } from '../model/SessionModels';
 import { i18n } from '../utils/I18n';
 
@@ -81,6 +82,10 @@ class NativeSessionBackendImpl implements SessionBackend {
   private buildNativeConfig(profile: ConnectionProfile): NativeSessionConfig {
     const width: number = profile.desktopWidth > 0 ? profile.desktopWidth : DEFAULT_DESKTOP_WIDTH;
     const height: number = profile.desktopHeight > 0 ? profile.desktopHeight : DEFAULT_DESKTOP_HEIGHT;
+    const drives: NativeDriveRedirection[] = normalizeDriveRedirections(profile.driveRedirections)
+      .map((item: DriveRedirection): NativeDriveRedirection => {
+        return { name: item.name, path: item.path };
+      });
     return {
       name: profile.name,
       host: profile.host,
@@ -101,7 +106,8 @@ class NativeSessionBackendImpl implements SessionBackend {
       ignoreCertificate: true,
       enableGfx: profile.enableGfx,
       desktopWidth: width,
-      desktopHeight: height
+      desktopHeight: height,
+      driveRedirections: drives
     };
   }
 

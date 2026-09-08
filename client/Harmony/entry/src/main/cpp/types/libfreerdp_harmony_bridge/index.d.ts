@@ -1,3 +1,8 @@
+export interface NativeDriveRedirection {
+  name: string;
+  path: string;
+}
+
 export interface NativeSessionConfig {
   name: string;
   host: string;
@@ -19,6 +24,7 @@ export interface NativeSessionConfig {
   enableGfx: boolean;
   desktopWidth: number;
   desktopHeight: number;
+  driveRedirections: NativeDriveRedirection[];
 }
 
 export interface NativeSessionInfo {

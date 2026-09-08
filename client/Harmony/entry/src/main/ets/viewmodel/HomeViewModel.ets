@@ -1,4 +1,5 @@
-import { ConnectionProfile, createEmptyProfile, cloneProfile } from '../model/ConnectionProfile';
+import { ConnectionProfile, createEmptyProfile, cloneProfile, DriveRedirection,
+  deriveDriveName, normalizeDriveRedirections } from '../model/ConnectionProfile';
 import { BookmarkService } from '../service/BookmarkService';
 import { IdGenerator } from '../utils/IdGenerator';
 import { i18n } from '../utils/I18n';
@@ -161,6 +162,68 @@ export class HomeViewModel {
     this.persistDraft();
   }
 
+  addDriveRedirection(name: string, path: string): void {
+    const trimmedPath: string = path.trim();
+    // 只要给出了路径就接受该条目；盘符名为空时按目录名兜底，
+    // 避免用户仅选择目录、未填名称时条目被静默丢弃。
+    if (trimmedPath.length === 0) {
+      logger.warn(LogTags.HOME_VIEWMODEL, 'addDriveRedirection ignored: empty path');
+      return;
+    }
+    const trimmedName: string = name.trim().length > 0 ? name.trim() : deriveDriveName(trimmedPath);
+    if (trimmedName.length === 0) {
+      logger.warn(LogTags.HOME_VIEWMODEL, 'addDriveRedirection ignored: cannot derive name from path');
+      return;
+    }
+    const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
+    const newEntry: DriveRedirection = { name: trimmedName, path: trimmedPath };
+    const drives: DriveRedirection[] = [...nextProfile.driveRedirections, newEntry];
+    nextProfile.driveRedirections = drives;
+    this.profile = nextProfile;
+    logger.info(LogTags.HOME_VIEWMODEL,
+      `addDriveRedirection: name=${trimmedName}, total=${drives.length}`);
+    this.persistDraft();
+  }
+
+  updateDriveRedirection(index: number, name: string, path: string): void {
+    if (index < 0 || index >= this.profile.driveRedirections.length) {
+      return;
+    }
+    // 编辑过程中保留用户原始输入（可能暂时为空或含空格），
+    // 保存 / 下发原生层时再由 normalizeDriveRedirections 统一规整，
+    // 这样既不会打断输入，也不会因为半填状态丢失条目。
+    const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
+    const drives: DriveRedirection[] = nextProfile.driveRedirections.map((item: DriveRedirection, idx: number): DriveRedirection => {
+      if (idx === index) {
+        return { name: name, path: path };
+      }
+      return { name: item.name, path: item.path };
+    });
+    nextProfile.driveRedirections = drives;
+    this.profile = nextProfile;
+    this.persistDraft();
+  }
+
+  removeDriveRedirection(index: number): void {
+    if (index < 0 || index >= this.profile.driveRedirections.length) {
+      return;
+    }
+    const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
+    const drives: DriveRedirection[] = [];
+    let idx: number = 0;
+    while (idx < nextProfile.driveRedirections.length) {
+      if (idx !== index) {
+        const src: DriveRedirection = nextProfile.driveRedirections[idx];
+        const item: DriveRedirection = { name: src.name, path: src.path };
+        drives.push(item);
+      }
+      idx += 1;
+    }
+    nextProfile.driveRedirections = drives;
+    this.profile = nextProfile;
+    this.persistDraft();
+  }
+
   createNewProfile(): void {
     this.profile = createEmptyProfile(IdGenerator.next('profile'));
     this.isEditingBookmark = false;
@@ -209,6 +272,11 @@ export class HomeViewModel {
       const saved: ConnectionProfile = this.copyProfile(this.profile);
       saved.id = this.isEditingBookmark ? this.profile.id : IdGenerator.next('bookmark');
       saved.name = this.profile.name.length > 0 ? this.profile.name : this.profile.host;
+      // 保存前统一规整重定向目录：补齐缺失的盘符名、丢弃空路径行，
+      // 保证界面上有效的条目都会被真正写入书签。
+      saved.driveRedirections = normalizeDriveRedirections(saved.driveRedirections);
+      logger.info(LogTags.HOME_VIEWMODEL,
+        `Saving bookmark drives: count=${saved.driveRedirections.length}`);
       await this.bookmarkService.save(context, saved);
       this.isEditingBookmark = true;
       this.bookmarks = await this.bookmarkService.list(context);
