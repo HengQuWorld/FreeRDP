@@ -2,10 +2,12 @@ import { ConnectionForm } from '../components/ConnectionForm';
 import { BookmarkList } from '../components/BookmarkList';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { LanguageToggle } from '../components/LanguageToggle';
+import { ReviewPromptDialog } from '../components/ReviewPromptDialog';
 import { HomeViewModel } from '../viewmodel/HomeViewModel';
 import { SessionRecord } from '../service/SessionManager';
 import { sessionManager } from '../service/SessionManager';
 import { sessionWindowManager } from '../service/SessionWindowManager';
+import { appReviewService, ReviewRequestResult } from '../service/AppReviewService';
 import { SessionStage } from '../model/SessionModels';
 import { ConnectionProfile } from '../model/ConnectionProfile';
 import { common } from '@kit.AbilityKit';
@@ -70,6 +72,10 @@ struct Index {
   private refreshTimer: number = -1;
   private connectionListScroller: Scroller = new Scroller();
   private nextToastId: number = 1;
+  private reviewPromptOpened: boolean = false;
+  private reviewPromptInFlight: boolean = false;
+  private lastKnownSessionCount: number = 0;
+  private sessionEndPromptTimer: number = -1;
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
@@ -118,15 +124,32 @@ struct Index {
     return 800;
   }
 
+  reviewDialogController: CustomDialogController = new CustomDialogController({
+    builder: ReviewPromptDialog({
+      onRate: () => {
+        void this.startReview();
+      },
+      onLater: () => {},
+      onNeverAsk: () => {
+        void appReviewService.markNeverAsk();
+      }
+    }),
+    alignment: DialogAlignment.Center,
+    autoCancel: true,
+    customStyle: true
+  });
+
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     void this.homeViewModel.initialize(context);
+    void appReviewService.initialize(context);
 
     this.activeSessions = sessionManager.getActiveSessions();
+    this.lastKnownSessionCount = this.activeSessions.length;
 
     this.unsubSessionChanged = sessionManager.onChanged(() => {
-      this.activeSessions = sessionManager.getActiveSessions();
+      this.handleSessionsChanged();
     });
 
     this.unsubCnDiscovered = sessionManager.onCertCommonNameDiscovered((_sessionId: number, cn: string) => {
@@ -139,6 +162,7 @@ struct Index {
 
     this.refreshTimer = setInterval(() => {
       this.activeSessions = sessionManager.getActiveSessions();
+      this.lastKnownSessionCount = this.activeSessions.length;
     }, 2000);
 
     void this.loadAgreements();
@@ -161,6 +185,37 @@ struct Index {
       clearInterval(this.refreshTimer);
       this.refreshTimer = -1;
     }
+    if (this.sessionEndPromptTimer >= 0) {
+      clearTimeout(this.sessionEndPromptTimer);
+      this.sessionEndPromptTimer = -1;
+    }
+  }
+
+  private handleSessionsChanged(): void {
+    const sessions: SessionRecord[] = sessionManager.getActiveSessions();
+    const previous: number = this.lastKnownSessionCount;
+    this.lastKnownSessionCount = sessions.length;
+    this.activeSessions = sessions;
+    if (sessions.length < previous) {
+      this.scheduleReviewPromptAfterSessionEnd();
+    }
+  }
+
+  /**
+   * 会话窗口关闭后（自由多窗口下主窗口不会重新触发 onPageShow），
+   * 稍等窗口切换完成再尝试主动促评。
+   */
+  private scheduleReviewPromptAfterSessionEnd(): void {
+    if (this.sessionEndPromptTimer >= 0) {
+      clearTimeout(this.sessionEndPromptTimer);
+    }
+    this.sessionEndPromptTimer = setTimeout(() => {
+      this.sessionEndPromptTimer = -1;
+      if (this.isConnecting || sessionManager.getActiveSessions().length > 0) {
+        return;
+      }
+      void this.maybePromptReview();
+    }, 800);
   }
 
   onPageShow(): void {
@@ -172,6 +227,8 @@ struct Index {
       }
     }
     this.activeSessions = sessions;
+    this.lastKnownSessionCount = sessions.length;
+    void this.maybePromptReview();
   }
 
   private createFallbackAgreementText(title: string): string {
@@ -276,6 +333,9 @@ struct Index {
       this.launchAgreementsAccepted = accepted;
       if (!accepted) {
         this.agreementDialogMode = AGREEMENT_DIALOG_LAUNCH;
+      } else {
+        // 冷启动时 onPageShow 可能早于协议状态加载完成而被跳过，这里补一次促评检查
+        void this.maybePromptReview();
       }
     } catch (_e) {
       console.error('Failed to load launch agreements state');
@@ -370,6 +430,58 @@ struct Index {
     console.info(`Copied: ${text}`);
   }
 
+  /**
+   * 引导用户评价：优先拉起应用市场提供的应用内评价弹窗，
+   * 弹窗不可用（未登录华为账号、已评价过等）时兜底跳转应用市场写评论页。
+   */
+  private async startReview(): Promise<void> {
+    const result: ReviewRequestResult = await appReviewService.requestInAppReview();
+    if (result === ReviewRequestResult.Shown) {
+      this.showToast(i18n.get(this.appLanguage, 'review_thanks'));
+      return;
+    }
+    if (result === ReviewRequestResult.AlreadyReviewed) {
+      // 先让用户看到原因，再跳应用市场写评论页核实或修改
+      this.showToast(i18n.get(this.appLanguage, 'review_already_done'));
+      setTimeout(() => {
+        void appReviewService.openStoreReviewPage();
+      }, 1200);
+      return;
+    }
+
+    // 弹窗不可用（配额超限、未登录华为账号等）：说明原因并兜底跳应用市场写评论页
+    const opened: boolean = await appReviewService.openStoreReviewPage();
+    if (!opened) {
+      this.showToast(i18n.get(this.appLanguage,
+        result === ReviewRequestResult.LimitReached ? 'review_comment_limit' : 'review_failed'), true);
+      return;
+    }
+    const hintKey: string = result === ReviewRequestResult.LimitReached ? 'review_limit_opened'
+      : result === ReviewRequestResult.Unavailable ? 'review_need_signin'
+        : 'review_store_opened';
+    this.showToast(i18n.get(this.appLanguage, hintKey));
+  }
+
+  private async maybePromptReview(): Promise<void> {
+    // 促评弹窗的多个触发点（onPageShow、会话窗口关闭回调、协议状态加载完成）
+    // 可能在同一时刻被调用，这里用同步置位的 in-flight 标记避免重复计数/重复弹窗
+    if (this.reviewPromptInFlight || this.reviewPromptOpened || !this.launchAgreementsAccepted) {
+      return;
+    }
+    this.reviewPromptInFlight = true;
+    try {
+      const shouldPrompt: boolean = await appReviewService.shouldPrompt();
+      if (!shouldPrompt) {
+        return;
+      }
+      this.reviewPromptOpened = true;
+      await appReviewService.markPromptShown();
+      this.reviewDialogController.open();
+    } finally {
+      this.reviewPromptInFlight = false;
+    }
+  }
+
   private async connectAndOpenWindow(): Promise<void> {
     if (this.isConnecting) {
       return;
@@ -408,6 +520,7 @@ struct Index {
         const msg = `${i18n.get(this.appLanguage, 'connected_to')} ${profile.host}${i18n.get(this.appLanguage, 'remote_window_opened')}`;
         this.homeViewModel.lastMessage = msg;
         this.showToast(msg);
+        void appReviewService.notifySuccessfulConnection();
       }
     } catch (e) {
       const msg = i18n.get(this.appLanguage, 'connect_failed_prefix') + (e as Error).message;
@@ -1153,6 +1266,23 @@ struct Index {
                   Blank().height(2);
                   this.buildAboutLinkRow(i18n.get(this.appLanguage, 'official_website'), PROJECT_HOMEPAGE_URL, PROJECT_HOMEPAGE_URL);
                 }
+              }
+              .width('100%')
+              .padding(18)
+              .backgroundColor(this.colors.surfaceElevated)
+              .border({ width: 1, color: this.colors.surfaceElevatedBorder })
+              .borderRadius(18);
+
+              Column({ space: 14 }) {
+                Text(i18n.get(this.appLanguage, 'review_section'))
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.colors.mutedForeground)
+                  .letterSpacing(0.5);
+
+                this.buildAboutTapRow(i18n.get(this.appLanguage, 'review_about_row'),
+                  i18n.get(this.appLanguage, 'review_about_row_hint'),
+                  () => { void this.startReview(); });
               }
               .width('100%')
               .padding(18)

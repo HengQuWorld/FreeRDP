@@ -18,6 +18,7 @@ export interface LogTagsType {
   SESSION_ABILITY: string;
   BOOKMARK_SERVICE: string;
   KEYBOARD_HELPER: string;
+  APP_REVIEW: string;
 }
 
 export class Logger {
@@ -109,5 +110,6 @@ export const LogTags: LogTagsType = {
   ENTRY_ABILITY: 'EntryAbility',
   SESSION_ABILITY: 'SessionAbility',
   BOOKMARK_SERVICE: 'BookmarkService',
-  KEYBOARD_HELPER: 'KeyboardHelper'
+  KEYBOARD_HELPER: 'KeyboardHelper',
+  APP_REVIEW: 'AppReview'
 };
