@@ -108,6 +108,16 @@ public class SessionInputManager
 		keyboardMapper.reset(this);
 	}
 
+	// Drops any future input on a stale/native-freed session instance.
+	public void detachSession()
+	{
+		cancelPendingEvents();
+		handler.removeMessages(MSG_SCROLLING_REQUESTED);
+		keyboardMapper.reset(null);
+		bitmap = null;
+		instance = 0;
+	}
+
 	// Called when the session bitmap is created or replaced (OnSettingsChanged / OnGraphicsResize).
 	public void setBitmap(Bitmap bitmap)
 	{

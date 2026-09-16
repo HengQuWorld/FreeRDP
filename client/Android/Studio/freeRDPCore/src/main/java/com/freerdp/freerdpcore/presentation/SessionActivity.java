@@ -114,6 +114,7 @@ public class SessionActivity extends AppCompatActivity
 	private ClipboardManagerProxy mClipboardManager;
 	private SessionInputManager inputManager;
 	private SessionDialogs dialogs;
+    private boolean sessionInputAttached = false;
 
 	private void hideSystemBars()
 	{
@@ -244,8 +245,11 @@ public class SessionActivity extends AppCompatActivity
 	{
 		super.onWindowFocusChanged(hasFocus);
 		if (hasFocus)
+		{
 			hideSystemBars();
-		mClipboardManager.getPrimaryClipManually();
+			if (sessionInputAttached && mClipboardManager != null)
+				mClipboardManager.getPrimaryClipManually();
+		}
 	}
 
 	@Override protected void onStart()
@@ -287,6 +291,7 @@ public class SessionActivity extends AppCompatActivity
 		{
 			connectThread.interrupt();
 		}
+		detachSessionInput();
 		super.onDestroy();
 		Log.v(TAG, "Session.onDestroy");
 
@@ -302,10 +307,15 @@ public class SessionActivity extends AppCompatActivity
 		sessionViewModel.unregister();
 
 		// remove clipboard listener
-		mClipboardManager.removeClipboardboardChangedListener(this);
+		if (mClipboardManager != null)
+			mClipboardManager.removeClipboardboardChangedListener(this);
 
 		// free session
-		GlobalApp.freeSession(session.getInstance());
+		if (session != null)
+		{
+			session.setUIEventListener(null);
+			GlobalApp.freeSession(session.getInstance());
+		}
 
 		session = null;
 	}
@@ -331,14 +341,19 @@ public class SessionActivity extends AppCompatActivity
 			// freerdp://user@ip:port/connect?sound=&rfx=&p=password&clipboard=%2b&themes=-
 			connect(openUri);
 		}
-		else if (bundle.containsKey(PARAM_INSTANCE))
+		else if (bundle != null && bundle.containsKey(PARAM_INSTANCE))
 		{
 			int inst = bundle.getInt(PARAM_INSTANCE);
 			session = GlobalApp.getSession(inst);
+                        if (session == null || session.getSurface() == null)
+                        {
+                                closeSessionActivity(RESULT_CANCELED);
+                                return;
+                        }
 			bitmap = session.getSurface().getBitmap();
 			bindSession();
 		}
-		else if (bundle.containsKey(PARAM_CONNECTION_REFERENCE))
+		else if (bundle != null && bundle.containsKey(PARAM_CONNECTION_REFERENCE))
 		{
 			String refStr = bundle.getString(PARAM_CONNECTION_REFERENCE);
 			if (ConnectionReference.isHostnameReference(refStr))
@@ -432,6 +447,7 @@ public class SessionActivity extends AppCompatActivity
 
 	private void connectWithTitle(String title)
 	{
+                sessionInputAttached = false;
 		session.setUIEventListener(this);
 
 		sessionViewModel.register(session.getInstance());
@@ -450,15 +466,25 @@ public class SessionActivity extends AppCompatActivity
 	private void bindSession()
 	{
 		Log.v(TAG, "bindSession called");
+                if (session == null)
+                        return;
 		session.setUIEventListener(this);
 		sessionView.onSurfaceChange(session);
 		scrollView.requestLayout();
 
 		Bitmap surface = session.getSurface() != null ? session.getSurface().getBitmap() : null;
 		inputManager.attachSession(session.getInstance(), surface);
+                sessionInputAttached = true;
 		inputManager.setScreenSize(screen_width, screen_height);
 		hideSystemBars();
 	}
+
+        private void detachSessionInput()
+        {
+                sessionInputAttached = false;
+                if (inputManager != null)
+                        inputManager.detachSession();
+        }
 
 	private void closeSessionActivity(int resultCode)
 	{
@@ -680,7 +706,9 @@ public class SessionActivity extends AppCompatActivity
 	@Override public void onClipboardChanged(String data)
 	{
 		Log.v(TAG, "onClipboardChanged: " + data);
-		LibFreeRDP.sendClipboardData(session.getInstance(), data);
+                if (!sessionInputAttached || session == null)
+                        return;
+                LibFreeRDP.sendClipboardData(session.getInstance(), data);
 	}
 
 	private void onConnectionStateChanged(SessionViewModel.ConnectionState state)
@@ -750,6 +778,10 @@ public class SessionActivity extends AppCompatActivity
 		// cancel any pending input events
 		if (inputManager != null)
 			inputManager.cancelPendingEvents();
+                detachSessionInput();
+
+                if (session != null)
+                        session.setUIEventListener(null);
 
 		dialogs.dismissProgress();
 
@@ -768,6 +800,7 @@ public class SessionActivity extends AppCompatActivity
 		// cancel any pending input events
 		if (inputManager != null)
 			inputManager.cancelPendingEvents();
+                detachSessionInput();
 
 		if (ApplicationSettingsActivity.getKeepScreenOnWhenConnected(this))
 		{
@@ -776,7 +809,8 @@ public class SessionActivity extends AppCompatActivity
 
 		dialogs.dismissProgress();
 
-		session.setUIEventListener(null);
+                if (session != null)
+                        session.setUIEventListener(null);
 		closeSessionActivity(RESULT_OK);
 	}
 }

@@ -420,6 +420,9 @@ public class KeyboardMapper
 
 	public boolean processAndroidKeyEvent(KeyEvent event)
 	{
+		if (listener == null)
+			return false;
+
 		switch (event.getAction())
 		{
 			// we only process down events
@@ -480,6 +483,9 @@ public class KeyboardMapper
 
 	public void processCustomKeyEvent(int keycode)
 	{
+		if (listener == null)
+			return;
+
 		int extCode = getExtendedKeyCode(keycode);
 		if (extCode == 0)
 			return;
@@ -513,6 +519,9 @@ public class KeyboardMapper
 
 	public void sendAltF4()
 	{
+		if (listener == null)
+			return;
+
 		listener.processVirtualKey(VK_LMENU, true);
 		listener.processVirtualKey(VK_F4, true);
 		listener.processVirtualKey(VK_F4, false);
@@ -574,6 +583,9 @@ public class KeyboardMapper
 
 	private void processToggleButton(int keycode)
 	{
+		if (listener == null)
+			return;
+
 		switch (keycode)
 		{
 			case VK_LSHIFT:
@@ -635,6 +647,19 @@ public class KeyboardMapper
 
 	private void resetModifierKeysAfterInput(boolean force)
 	{
+		if (listener == null)
+		{
+			shiftPressed = false;
+			ctrlPressed = false;
+			altPressed = false;
+			winPressed = false;
+			isShiftLocked = false;
+			isCtrlLocked = false;
+			isAltLocked = false;
+			isWinLocked = false;
+			return;
+		}
+
 		if (shiftPressed && (!isShiftLocked || force))
 		{
 			listener.processVirtualKey(VK_LSHIFT, false);
@@ -662,6 +687,9 @@ public class KeyboardMapper
 
 	private void switchKeyboard(int keycode)
 	{
+		if (listener == null)
+			return;
+
 		switch (keycode)
 		{
 			case EXTKEY_KBFUNCTIONKEYS:

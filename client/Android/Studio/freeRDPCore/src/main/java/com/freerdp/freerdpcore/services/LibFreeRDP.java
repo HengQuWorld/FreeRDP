@@ -498,22 +498,38 @@ public class LibFreeRDP
 
 	public static boolean sendCursorEvent(long inst, int x, int y, int flags)
 	{
+		if (!isInstanceConnected(inst))
+			return false;
 		return freerdp_send_cursor_event(inst, x, y, flags);
 	}
 
 	public static boolean sendKeyEvent(long inst, int keycode, boolean down)
 	{
+		if (!isInstanceConnected(inst))
+			return false;
 		return freerdp_send_key_event(inst, keycode, down);
 	}
 
 	public static boolean sendUnicodeKeyEvent(long inst, int keycode, boolean down)
 	{
+		if (!isInstanceConnected(inst))
+			return false;
 		return freerdp_send_unicodekey_event(inst, keycode, down);
 	}
 
 	public static boolean sendClipboardData(long inst, String data)
 	{
+		if (!isInstanceConnected(inst))
+			return false;
 		return freerdp_send_clipboard_data(inst, data);
+	}
+
+	private static boolean isInstanceConnected(long inst)
+	{
+		synchronized (mInstanceState)
+		{
+			return inst != 0 && mInstanceState.get(inst, false);
+		}
 	}
 
 	private static void OnConnectionSuccess(long inst)
