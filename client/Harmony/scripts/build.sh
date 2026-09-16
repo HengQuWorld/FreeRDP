@@ -103,7 +103,7 @@ detect_native_changes() {
         winpr \
         include \
         cmake 2>/dev/null || true
-    } | awk 'NF && !seen[$0]++'
+    } | awk 'NF && $0 !~ /(^|\/)\.DS_Store$/ && !seen[$0]++'
   )"
 
   if [[ -n "${changes}" ]]; then
