@@ -12,6 +12,10 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
+# Note: read-phase timeouts raise socket.timeout/TimeoutError (OSError),
+# which are NOT URLError subclasses - catch OSError too so we fall back
+# gracefully instead of crashing the build.
+
 AGREEMENTS = {
     "bihu-privacy-policy.md": "https://www.hengqu.world/api/agreements/bihu-privacy-policy",
     "bihu-user-agreement.md": "https://www.hengqu.world/api/agreements/bihu-user-agreement",
@@ -37,7 +41,7 @@ def fetch_agreement(url: str, timeout: int = 30) -> str | None:
                 print(f"[sync_agreements] HTTP {resp.status} for {url}", file=sys.stderr)
                 return None
             return resp.read().decode("utf-8")
-    except URLError as e:
+    except (URLError, OSError) as e:
         print(f"[sync_agreements] WARNING: failed to fetch {url}: {e}", file=sys.stderr)
         return None
 
