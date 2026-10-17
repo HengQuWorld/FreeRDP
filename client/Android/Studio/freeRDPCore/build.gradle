@@ -1,17 +1,46 @@
 apply plugin: 'com.android.library'
 
 def skipNativeBuild = project.hasProperty('skipNativeBuild')
-def nativeLibsCacheDir = file('.native-libs-cache')
+
+// Native libraries differ per variant: the debug variant builds without the
+// codec libraries that release and qa enable. Every path that carries them is
+// therefore keyed by variant name, because one shared directory lets a variant's
+// libraries leak into another variant's APK.
+def nativeLibsVariants = ['debug', 'release', 'qa']
+
+// Which variant's cached libraries the skip-native path should package.
+// build.sh passes the build mode it was asked for; without it we cannot tell
+// debug from release at configuration time, and guessing would silently ship
+// the wrong set of libraries.
+if (skipNativeBuild && !project.hasProperty('nativeLibsVariant')) {
+    throw new GradleException(
+        'skipNativeBuild requires -PnativeLibsVariant=<debug|release|qa> so the build packages ' +
+        "that variant's native libraries rather than another variant's. build.sh sets this itself.")
+}
+def nativeLibsVariant = project.findProperty('nativeLibsVariant')
+if (nativeLibsVariant != null && !nativeLibsVariants.contains(nativeLibsVariant)) {
+    throw new GradleException(
+        "Unknown -PnativeLibsVariant=${nativeLibsVariant}; expected one of ${nativeLibsVariants}.")
+}
+
+// The skip-native path packages only the selected variant's cache, so a cache
+// that was never populated yields an APK with no FreeRDP libraries at all -- a
+// build that succeeds and ships something broken. Refuse it here, at configure
+// time, rather than let it reach an APK.
+if (skipNativeBuild) {
+    def cachedVariantDir = file(".native-libs-cache/${nativeLibsVariant}")
+    if (fileTree(cachedVariantDir) { include '**/*.so' }.isEmpty()) {
+        throw new GradleException(
+            "No cached native libraries for variant '${nativeLibsVariant}' under ${cachedVariantDir}, " +
+            'so a skip-native build would package an APK without the FreeRDP libraries. ' +
+            "Run a full build of this variant first (client/Android/scripts/build.sh --full ${nativeLibsVariant}), " +
+            'or omit -PskipNativeBuild.')
+    }
+}
 
 android {
     compileSdkVersion = rootProject.ext.compileApi
     buildToolsVersion = rootProject.ext.toolsVersion
-    packagingOptions {
-        jniLibs {
-            pickFirsts += ['lib/arm64-v8a/libfreerdp3.so', 'lib/armeabi-v7a/libfreerdp3.so', 'lib/x86/libfreerdp3.so', 'lib/x86_64/libfreerdp3.so', 'lib/arm64-v8a/libfreerdp-client3.so', 'lib/armeabi-v7a/libfreerdp-client3.so', 'lib/x86/libfreerdp-client3.so', 'lib/x86_64/libfreerdp-client3.so', 'lib/arm64-v8a/libwinpr3.so', 'lib/armeabi-v7a/libwinpr3.so', 'lib/x86/libwinpr3.so', 'lib/x86_64/libwinpr3.so']
-        }
-    }
-
 
     defaultConfig {
         minSdkVersion rootProject.ext.minApi
@@ -89,9 +118,21 @@ android {
         }
     }
     if (skipNativeBuild) {
+        // The cache is variant-scoped; src/main/jniLibs is intentionally not a
+        // source directory here or anywhere else.
         sourceSets {
             main {
-                jniLibs.srcDirs 'src/main/jniLibs', nativeLibsCacheDir.absolutePath
+                jniLibs.srcDirs = [file(".native-libs-cache/${nativeLibsVariant}")]
+            }
+        }
+    } else {
+        // Native builds get their libraries from the variant-scoped CMake output
+        // directory that AGP already collects. Clearing srcDirs also removes the
+        // default src/main/jniLibs, so stale libraries left there by an older
+        // build of a different variant can never be packaged again.
+        sourceSets {
+            main {
+                jniLibs.srcDirs = []
             }
         }
     }
@@ -112,61 +153,44 @@ dependencies {
     implementation 'androidx.sqlite:sqlite:2.6.2'
 }
 
-task cacheNativeLibs {
-    outputs.dir nativeLibsCacheDir
-    doLast {
-        def intermediatesDir = file("${buildDir}/intermediates")
-        def searchDirs = []
-        if (file("${intermediatesDir}/cmake").exists()) {
-            searchDirs << file("${intermediatesDir}/cmake")
-        }
-        if (file("${intermediatesDir}/cxx").exists()) {
-            file("${intermediatesDir}/cxx").eachDir { variantDir ->
-                variantDir.eachDir { hashDir ->
-                    searchDirs << hashDir
-                }
+// Cache the libraries AGP actually packaged for a variant, so a later
+// skip-native build of that same variant reproduces it exactly. Reading from
+// stripped_native_libs, which is keyed by variant name, is what keeps debug and
+// release libraries from being mixed in one cache directory.
+nativeLibsVariants.each { variant ->
+    def variantCap = variant.capitalize()
+    def cacheDir = file(".native-libs-cache/${variant}")
+
+    tasks.register("cacheNativeLibs${variantCap}") {
+        outputs.dir cacheDir
+        doLast {
+            def libRoot = file("${buildDir}/intermediates/stripped_native_libs/${variant}")
+            if (!libRoot.exists()) {
+                logger.warn("[cacheNativeLibs${variantCap}] No packaged native libs found for " +
+                            "variant '${variant}' (${libRoot}); nothing cached.")
+                return
             }
-        }
-        if (searchDirs.isEmpty()) {
-            logger.lifecycle('[cacheNativeLibs] No CMake/CXX output directory found, skipping cache')
-            return
-        }
-        def abis = ['arm64-v8a', 'armeabi-v7a', 'x86', 'x86_64']
-        def jniLibsDir = file('src/main/jniLibs')
-        abis.each { abi ->
-            def destDir = file("${nativeLibsCacheDir}/${abi}")
-            searchDirs.each { baseDir ->
-                def candidates = [
-                    file("${baseDir}/debug/obj/${abi}"),
-                    file("${baseDir}/release/obj/${abi}"),
-                    file("${baseDir}/relWithDebInfo/obj/${abi}"),
-                    file("${baseDir}/obj/${abi}")
-                ]
-                candidates.each { srcDir ->
-                    if (srcDir.exists()) {
-                        destDir.mkdirs()
-                        srcDir.listFiles({ f -> f.name.endsWith('.so') } as FileFilter)?.each { soFile ->
-                            def jniExisting = file("${jniLibsDir}/${abi}/${soFile.name}")
-                            if (jniExisting.exists()) {
-                                return
-                            }
-                            def dest = new File(destDir, soFile.name)
-                            dest.bytes = soFile.bytes
-                        }
-                    }
-                }
+
+            def copied = 0
+            fileTree(libRoot) { include '**/lib/*/*.so' }.each { soFile ->
+                def dest = new File(cacheDir, "${soFile.parentFile.name}/${soFile.name}")
+                dest.parentFile.mkdirs()
+                dest.bytes = soFile.bytes
+                copied++
             }
-        }
-        if (!nativeLibsCacheDir.exists() || !nativeLibsCacheDir.listFiles()) {
-            logger.warn('[cacheNativeLibs] No cached native libs found. Run a full build first (without -PskipNativeBuild).')
-        } else {
-            logger.lifecycle("[cacheNativeLibs] Native libs cached to ${nativeLibsCacheDir.absolutePath}")
+
+            if (copied == 0) {
+                logger.warn("[cacheNativeLibs${variantCap}] No .so files found under ${libRoot}.")
+            } else {
+                logger.lifecycle("[cacheNativeLibs${variantCap}] Cached ${copied} native lib(s) to ${cacheDir}")
+            }
         }
     }
 }
 
-tasks.matching { it.name == 'assembleDebug' || it.name == 'assembleRelease' }.configureEach {
+tasks.matching { it.name ==~ /assemble(Debug|Release|Qa)/ }.configureEach { assembleTask ->
     if (!skipNativeBuild) {
-        finalizedBy 'cacheNativeLibs'
+        def variantCap = assembleTask.name.substring('assemble'.length())
+        finalizedBy "cacheNativeLibs${variantCap}"
     }
 }

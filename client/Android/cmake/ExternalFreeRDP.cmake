@@ -82,13 +82,21 @@ set_target_properties(
 )
 add_dependencies(winpr3-lib freerdp)
 
-# Copy built .so files into jniLibs/ so Gradle can package them
+# Copy the built .so files into the variant-scoped CMake output directory so
+# Gradle can package them.
+#
+# This is deliberately NOT a shared source directory. CMAKE_LIBRARY_OUTPUT_DIRECTORY
+# is build/intermediates/cxx/<variant>/<hash>/obj/<abi>, which is unique per
+# variant and is the directory AGP already collects native libraries from. The
+# old destination here was src/main/jniLibs/<abi>, one path shared by every
+# variant, so a release or qa build (all codecs enabled) left its extra libraries
+# behind for every later debug build (all codecs disabled) to package as well.
 add_custom_command(
   TARGET freerdp
   POST_BUILD
   COMMAND
     ${CMAKE_COMMAND} -DSRC_DIR=${DEPS_INSTALL_DIR}/lib
-    -DDST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${CMAKE_ANDROID_ARCH_ABI} -P
+    -DDST_DIR=${CMAKE_LIBRARY_OUTPUT_DIRECTORY} -P
     ${FREERDP_SOURCE_DIR}/client/Android/cmake/CopySharedLibs.cmake
-  COMMENT "Copying .so files to jniLibs/${CMAKE_ANDROID_ARCH_ABI}"
+  COMMENT "Copying .so files to ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}"
 )

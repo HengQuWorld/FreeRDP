@@ -45,3 +45,4 @@ client/Harmony/native/third_party/ohos-openssl/
 client/Harmony/native/third_party/openssl-prebuilt/
 /build-harmony-openssl/
 /cache/
+client/Android/.idea/
