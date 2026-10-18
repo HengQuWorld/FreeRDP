@@ -40,10 +40,22 @@ int main() {
          "FREERDP_ERROR_CONNECT_FAILED already set!",
          false, false, "error override during failure");
 
+  // Aborting a connect that is still in flight closes the socket under it, so
+  // the transport reports the very failure the abort caused. Seen on a
+  // cancelled connect to an unreachable host, right after the cancel.
+  Expect("Couldn't get socket ip address", true, true, "aborted socket");
+  Expect("Failed to connect", true, true, "aborted nego connect");
+
+  // The same two during a real failure must keep their level, otherwise a
+  // genuine network error would be hidden.
+  Expect("Couldn't get socket ip address", false, false, "socket failure, no cancel");
+  Expect("Failed to connect", false, false, "nego failure, no cancel");
+
   // Everything else keeps its severity even while the user is disconnecting.
   Expect("TLS handshake failed: certificate verify failed", true, false, "unrelated error");
   Expect("freerdp_connect failed", true, false, "unrelated connect error");
   Expect("ERRCONNECT_AUTHENTICATION_FAILED [0x00020009]", true, false, "auth failure");
+  Expect("Failed to connect with TLS security", true, false, "nego debug variant");
   Expect(nullptr, true, false, "null text");
 
   std::cout << "\n" << (failures == 0 ? "ALL PASSED" : "SOME FAILED") << ": " << failures
