@@ -9,8 +9,29 @@ if(NOT EXISTS "${OHOS_TOOLCHAIN_FILE}")
   message(FATAL_ERROR "ExternalFreeRDP: ohos.toolchain.cmake not found at ${OHOS_TOOLCHAIN_FILE}")
 endif()
 
-set(FREERDP_PERSISTENT_CACHE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../cache/build/freerdp/${OHOS_ARCH}")
+# The persistent cache is keyed by architecture *and* build type. The two
+# builds pass different configure options and produce different archives, so a
+# directory shared between them let a debug package link a release core (or the
+# other way round) while looking like it used the build the developer asked for.
+string(TOLOWER "${CMAKE_BUILD_TYPE}" FREERDP_BUILD_TYPE_KEY)
+if(FREERDP_BUILD_TYPE_KEY STREQUAL "")
+  set(FREERDP_BUILD_TYPE_KEY "default")
+endif()
+
+set(FREERDP_PERSISTENT_CACHE_DIR
+    "${CMAKE_CURRENT_LIST_DIR}/../../../cache/build/freerdp/${OHOS_ARCH}/${FREERDP_BUILD_TYPE_KEY}")
 set(FREERDP_INSTALL_DIR "${FREERDP_PERSISTENT_CACHE_DIR}/install")
+
+# With verbose assertions every WINPR_ASSERT becomes a logged, formatted check,
+# and the core library announces the option in a WARN banner on the first
+# context. That is worth having while debugging and is pure noise, plus a
+# per-check cost, in a released build. Upstream defaults the option ON, so the
+# Harmony build states it explicitly instead of inheriting it.
+if(FREERDP_BUILD_TYPE_KEY STREQUAL "debug" OR FREERDP_BUILD_TYPE_KEY STREQUAL "relwithdebinfo")
+  set(FREERDP_VERBOSE_WINPR_ASSERT ON)
+else()
+  set(FREERDP_VERBOSE_WINPR_ASSERT OFF)
+endif()
 
 set(FREERDP_CACHE_HIT OFF)
 if(EXISTS "${FREERDP_INSTALL_DIR}/lib/libfreerdp3.a" AND EXISTS "${FREERDP_INSTALL_DIR}/lib/libwinpr3.a")
@@ -21,7 +42,7 @@ if(EXISTS "${FREERDP_INSTALL_DIR}/lib/libfreerdp3.a" AND EXISTS "${FREERDP_INSTA
 endif()
 
 if(NOT FREERDP_CACHE_HIT)
-  message(STATUS "ExternalFreeRDP: Building FreeRDP from source for ${OHOS_ARCH}")
+  message(STATUS "ExternalFreeRDP: Building FreeRDP from source for ${OHOS_ARCH} (${FREERDP_BUILD_TYPE_KEY}, verbose asserts ${FREERDP_VERBOSE_WINPR_ASSERT})")
 
   set(FREERDP_CMAKE_ARGS
       -DCMAKE_TOOLCHAIN_FILE:FILEPATH=${OHOS_TOOLCHAIN_FILE}
@@ -62,6 +83,7 @@ if(NOT FREERDP_CACHE_HIT)
       -DWITH_INTERNAL_RC4:BOOL=ON
       -DWITH_INTERNAL_MD4:BOOL=ON
       -DWITH_INTERNAL_MD5:BOOL=ON
+      -DWITH_VERBOSE_WINPR_ASSERT:BOOL=${FREERDP_VERBOSE_WINPR_ASSERT}
   )
 
   if(TARGET openssl)
