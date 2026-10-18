@@ -86,4 +86,8 @@ else()
   # Header-only check that credentials never survive command line redaction.
   add_executable(test_redaction test_redaction.cpp)
   target_include_directories(test_redaction PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+  # Header-only check that a cancelled connect is not reported as a failure.
+  add_executable(test_cancellation_noise test_cancellation_noise.cpp)
+  target_include_directories(test_cancellation_noise PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

@@ -2,6 +2,7 @@
 #define FREERDP_HARMONY_SESSION_H
 
 #include <condition_variable>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -25,6 +26,10 @@ class FreeRDPHarmonySession {
 
   bool Connect();
   bool Disconnect();
+
+  // True once Disconnect() asked this session to stop. The log bridge uses it
+  // to tell a user cancellation apart from a real connection failure.
+  bool IsStopRequested() const;
 
   // True once no thread can still be running inside the session, so the caller
   // may destroy it. False while a teardown is in flight.
@@ -130,7 +135,9 @@ class FreeRDPHarmonySession {
   bool clipboardReady_;
   std::string localClipboardText_;
   bool started_;
-  bool stopRequested_;
+  // Atomic so the log callback can read it on any thread, including while the
+  // session mutex is held elsewhere; taking the mutex there would deadlock.
+  std::atomic<bool> stopRequested_;
   bool disconnecting_;
   bool warnedMissingNativeWindow_;
   std::thread worker_;

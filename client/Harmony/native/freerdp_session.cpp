@@ -1,5 +1,6 @@
 #include "freerdp_session.h"
 
+#include "cancellation_noise.h"
 #include "command_line_redaction.h"
 
 #include <algorithm>
@@ -57,6 +58,22 @@ static void HiLogInfo(const std::string& message) {
 static void HiLogError(const std::string& message) {
   OH_LOG_ERROR(LOG_APP, "%{public}s", message.c_str());
 }
+
+// The session whose connect is running on this thread, if any. FreeRDP logs a
+// cancelled connect exactly like a failed one, so the log bridge needs the
+// session's own verdict to tell the two apart. A thread local keeps that
+// verdict attached to the session that produced the message instead of to a
+// process-wide flag that another session could trip.
+static thread_local const FreeRDPHarmonySession* gConnectSession = nullptr;
+
+struct ScopedConnectSession {
+  explicit ScopedConnectSession(const FreeRDPHarmonySession* session) {
+    gConnectSession = session;
+  }
+  ~ScopedConnectSession() { gConnectSession = nullptr; }
+  ScopedConnectSession(const ScopedConnectSession&) = delete;
+  ScopedConnectSession& operator=(const ScopedConnectSession&) = delete;
+};
 
 constexpr DWORD kWaitTimeoutMs = 100;
 constexpr std::size_t kMaxConnectionHistory = 100;
@@ -671,12 +688,31 @@ static int HarmonyLogonErrorInfo(freerdp* instance, UINT32 data, UINT32 type) {
   return 1;
 }
 
+// libfreerdp reports a user-requested abort with the same ERROR severity it
+// uses for real faults. Those lines end up in hilog and, through it, in
+// AppGallery Connect's failure statistics, so a routine window close must not
+// look like a defect. The policy itself lives in cancellation_noise.h.
+static bool IsCancellationMessage(const wLogMessage* msg) {
+  if (msg == nullptr) {
+    return false;
+  }
+  const FreeRDPHarmonySession* session = gConnectSession;
+  const bool stopRequested = (session != nullptr) && session->IsStopRequested();
+  return freerdp_harmony::IsCancellationNoise(msg->TextString, stopRequested);
+}
+
 static BOOL HarmonyLogMessage(const wLogMessage* msg) {
   if (msg == nullptr) {
     return TRUE;
   }
+  DWORD level = msg->Level;
+  const bool downgraded = ((level == WLOG_ERROR) || (level == WLOG_WARN)) &&
+                          IsCancellationMessage(msg);
+  if (downgraded) {
+    level = WLOG_INFO;
+  }
   const char* levelStr = "INFO";
-  switch (msg->Level) {
+  switch (level) {
     case WLOG_TRACE: levelStr = "TRACE"; break;
     case WLOG_DEBUG: levelStr = "DEBUG"; break;
     case WLOG_INFO: levelStr = "INFO"; break;
@@ -684,7 +720,14 @@ static BOOL HarmonyLogMessage(const wLogMessage* msg) {
     case WLOG_ERROR: levelStr = "ERROR"; break;
     case WLOG_FATAL: levelStr = "FATAL"; break;
   }
-  OH_LOG_INFO(LOG_APP, "[WLog %{public}s] %{public}s%{public}s", levelStr, msg->PrefixString ? msg->PrefixString : "", msg->TextString ? msg->TextString : "");
+  const char* text = (msg->TextString != nullptr) ? msg->TextString : "";
+  if (downgraded) {
+    // The prefix this client installs on the appender layout is the level
+    // marker alone ("[%lv] "), so it would now contradict the INFO label.
+    OH_LOG_INFO(LOG_APP, "[WLog %{public}s] %{public}s", levelStr, text);
+    return TRUE;
+  }
+  OH_LOG_INFO(LOG_APP, "[WLog %{public}s] %{public}s%{public}s", levelStr, msg->PrefixString ? msg->PrefixString : "", text);
   return TRUE;
 }
 
@@ -968,6 +1011,10 @@ bool FreeRDPHarmonySession::Disconnect() {
   }
 
   return true;
+}
+
+bool FreeRDPHarmonySession::IsStopRequested() const {
+  return stopRequested_.load();
 }
 
 bool FreeRDPHarmonySession::IsTeardownComplete() const {
@@ -1809,6 +1856,7 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
 }
 
 void FreeRDPHarmonySession::ThreadMain() {
+  const ScopedConnectSession connectSession(this);
   rdpContext* context = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1965,6 +2013,9 @@ void FreeRDPHarmonySession::ThreadMain() {
 }
 
 void FreeRDPHarmonySession::ThreadMainWithRetry() {
+  // Every FreeRDP log line this thread emits belongs to this session; the log
+  // bridge reads that to downgrade cancellation noise to INFO.
+  const ScopedConnectSession connectSession(this);
   bool connected = false;
   
   while (!connected) {
