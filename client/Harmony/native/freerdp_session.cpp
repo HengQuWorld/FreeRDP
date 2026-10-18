@@ -1,5 +1,7 @@
 #include "freerdp_session.h"
 
+#include "command_line_redaction.h"
+
 #include <algorithm>
 #include <array>
 #include <cinttypes>
@@ -1638,9 +1640,11 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
 
   rdpSettings* settings = static_cast<rdpSettings*>(settingsPointer);
   std::vector<std::string> args = BuildCommandLineArgs();
+  // Computed once from the same argv that is parsed, so every log line below
+  // reports exactly what FreeRDP saw, with credentials masked.
+  const std::string loggedArgs = freerdp_harmony::RedactCommandLine(args);
   std::vector<char*> argv;
   argv.reserve(args.size());
-  std::string allArgs;
   for (const std::string& arg : args) {
     char* duplicated = _strdup(arg.c_str());
     if (duplicated == nullptr) {
@@ -1651,7 +1655,6 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
       return false;
     }
     argv.push_back(duplicated);
-    allArgs += arg + " ";
   }
 
   const DWORD status = freerdp_client_settings_parse_command_line(
@@ -1663,15 +1666,17 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
   if (status != 0) {
     WLog_ERR(TAG, "freerdp_client_settings_parse_command_line failed status=%" PRIu32
                       " args=%s",
-             status, allArgs.c_str());
+             status, loggedArgs.c_str());
     HiLogError("freerdp_client_settings_parse_command_line failed status=" +
-               std::to_string(status) + " args=" + allArgs);
-    outError = "parse cmdline failed: " + allArgs;
+               std::to_string(status) + " args=" + loggedArgs);
+    // The error string reaches the session UI and, through it, AppGallery
+    // Connect quality data: it must not carry the command line.
+    outError = "parse cmdline failed status=" + std::to_string(status);
     return false;
   }
 
-  WLog_INFO(TAG, "ApplySettings args=%s", allArgs.c_str());
-  HiLogInfo("ApplySettings args=" + allArgs);
+  WLog_INFO(TAG, "ApplySettings args=%s", loggedArgs.c_str());
+  HiLogInfo("ApplySettings args=" + loggedArgs);
 
   const std::uint32_t desktopWidth = config_.desktopWidth > 0 ? config_.desktopWidth : 1920U;
   const std::uint32_t desktopHeight = config_.desktopHeight > 0 ? config_.desktopHeight : 1080U;
@@ -1717,9 +1722,11 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   }
 
   // 凭据处理
+  // 密码绝不进入命令行：它会出现在 hilog、UI 错误提示和 WinPR 日志里。
+  // 连接时 FreeRDP 通过 AuthenticateEx 回调取凭据，由 FillAuthentication()
+  // 从 config_ 里提供，明文只存在于进程内存中。
   if (hasCredentials) {
     args.emplace_back("/u:" + config_.username);
-    args.emplace_back("/p:" + config_.password);
     if (!config_.domain.empty()) {
       args.emplace_back("/d:" + config_.domain);
     }
@@ -1744,15 +1751,13 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
 
   // 网关配置
   if (!config_.gateway.empty()) {
+    // 同理，网关密码不放进 argv；FillAuthentication() 在网关认证回调里提供。
     std::string gatewayArg = "/gateway:g:" + config_.gateway;
     if (!config_.gatewayUsername.empty()) {
       gatewayArg += ",u:" + config_.gatewayUsername;
     }
     if (!config_.gatewayDomain.empty()) {
       gatewayArg += ",d:" + config_.gatewayDomain;
-    }
-    if (!config_.gatewayPassword.empty()) {
-      gatewayArg += ",p:" + config_.gatewayPassword;
     }
     args.emplace_back(gatewayArg);
   }

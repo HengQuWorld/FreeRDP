@@ -82,4 +82,8 @@ else()
             ${FREERDP_BINARY_DIR} ${FREERDP_BINARY_DIR}/include ${FREERDP_BINARY_DIR}/winpr/include
   )
   target_link_libraries(test_cmdline PRIVATE freerdp-client freerdp winpr)
+
+  # Header-only check that credentials never survive command line redaction.
+  add_executable(test_redaction test_redaction.cpp)
+  target_include_directories(test_redaction PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 endif()
