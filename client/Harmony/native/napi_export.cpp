@@ -440,43 +440,112 @@ napi_value CreateSessionNapi(napi_env env, napi_callback_info info) {
   return result;
 }
 
-// Executes the session teardown away from the ArkTS main thread. Only native
-// code runs here: no NAPI call is allowed on a worker-pool thread.
-struct DisconnectWorkItem {
+// Work handed to the NAPI worker pool. ArkTS calls connect() and disconnect()
+// from the JS main thread, so anything that blocks inside FreeRDP has to run
+// here instead. Only native code runs on the pool thread: no NAPI call is
+// allowed there.
+struct SessionWorkItem {
   napi_async_work work = nullptr;
   napi_deferred deferred = nullptr;
   std::int32_t sessionId = 0;
 };
 
-void SettleDisconnectPromise(napi_env env, napi_deferred deferred) {
+// Resolves with `value`, or with undefined when nothing is passed. Called from
+// completion callbacks, which run back on the JS thread.
+void SettlePromise(napi_env env, napi_deferred deferred, napi_value value) {
   if (deferred == nullptr) {
     return;
   }
-  napi_value result = nullptr;
-  if (napi_get_undefined(env, &result) == napi_ok) {
-    napi_resolve_deferred(env, deferred, result);
+  napi_value undefinedValue = nullptr;
+  if (value == nullptr) {
+    if (napi_get_undefined(env, &undefinedValue) != napi_ok) {
+      return;
+    }
+    value = undefinedValue;
   }
+  napi_resolve_deferred(env, deferred, value);
 }
 
-void ExecuteDisconnectWork(napi_env /*env*/, void* data) {
-  auto* item = static_cast<DisconnectWorkItem*>(data);
-  if (item != nullptr) {
-    harmony_session_disconnect(item->sessionId);
-  }
-}
-
-void CompleteDisconnectWork(napi_env env, napi_status /*status*/, void* data) {
-  auto* item = static_cast<DisconnectWorkItem*>(data);
+void DeleteSessionWork(napi_env env, SessionWorkItem* item) {
   if (item == nullptr) {
     return;
   }
   if (item->work != nullptr) {
     napi_delete_async_work(env, item->work);
   }
+  delete item;
+}
+
+// Creates the promise ArkTS awaits and stores its deferred in `item`. Returns
+// nullptr when the runtime cannot create one; the caller then runs inline.
+napi_value CreateSessionWorkPromise(napi_env env, SessionWorkItem* item) {
+  napi_value promise = nullptr;
+  if (napi_create_promise(env, &item->deferred, &promise) != napi_ok) {
+    item->deferred = nullptr;
+    return nullptr;
+  }
+  return promise;
+}
+
+// Queues `execute` on the worker pool. Returns false when the work cannot be
+// queued; the caller owns `item` again and must run the job inline.
+//
+// The callback types are spelled out because this SDK's napi/native_api.h does
+// not pull in node_api_types.h, where the napi_async_*_callback typedefs live.
+bool QueueSessionWork(napi_env env, SessionWorkItem* item, const char* name,
+                      void (*execute)(napi_env, void*),
+                      void (*complete)(napi_env, napi_status, void*)) {
+  napi_value resourceName = nullptr;
+  if (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &resourceName) != napi_ok) {
+    return false;
+  }
+  if (napi_create_async_work(env, nullptr, resourceName, execute, complete, item, &item->work) !=
+      napi_ok) {
+    return false;
+  }
+  if (napi_queue_async_work(env, item->work) != napi_ok) {
+    napi_delete_async_work(env, item->work);
+    item->work = nullptr;
+    return false;
+  }
+  return true;
+}
+
+void ExecuteConnectWork(napi_env /*env*/, void* data) {
+  auto* item = static_cast<SessionWorkItem*>(data);
+  if (item != nullptr) {
+    harmony_session_connect(item->sessionId);
+  }
+}
+
+void CompleteConnectWork(napi_env env, napi_status /*status*/, void* data) {
+  auto* item = static_cast<SessionWorkItem*>(data);
+  if (item == nullptr) {
+    return;
+  }
+  const napi_deferred deferred = item->deferred;
+  const std::int32_t sessionId = item->sessionId;
+  DeleteSessionWork(env, item);
+  SettlePromise(env, deferred, BuildInfoObject(env, sessionId));
+}
+
+void ExecuteDisconnectWork(napi_env /*env*/, void* data) {
+  auto* item = static_cast<SessionWorkItem*>(data);
+  if (item != nullptr) {
+    harmony_session_disconnect(item->sessionId);
+  }
+}
+
+void CompleteDisconnectWork(napi_env env, napi_status /*status*/, void* data) {
+  auto* item = static_cast<SessionWorkItem*>(data);
+  if (item == nullptr) {
+    return;
+  }
+  const napi_deferred deferred = item->deferred;
+  DeleteSessionWork(env, item);
   // Resolve only now: the promise stands for "teardown finished", which is what
   // lets ArkTS drop its session record without racing the native side.
-  SettleDisconnectPromise(env, item->deferred);
-  delete item;
+  SettlePromise(env, deferred, nullptr);
 }
 
 napi_value ConnectNapi(napi_env env, napi_callback_info info) {
@@ -485,8 +554,33 @@ napi_value ConnectNapi(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
+  // Building the context and parsing its command line runs before the session
+  // thread starts. That work happened on the JS main thread until now: about
+  // 10 ms today, and more on a slow device or with more settings, which is
+  // time a frame does not get.
+  auto* item = new (std::nothrow) SessionWorkItem();
+  napi_value promise = (item != nullptr) ? CreateSessionWorkPromise(env, item) : nullptr;
+  if (promise == nullptr) {
+    // Cannot defer: keep the synchronous behaviour rather than returning a
+    // value the caller cannot await.
+    delete item;
+    harmony_session_connect(sessionId);
+    return BuildInfoObject(env, sessionId);
+  }
+
+  item->sessionId = sessionId;
+  if (QueueSessionWork(env, item, "FreeRDPHarmonyConnect", ExecuteConnectWork,
+                       CompleteConnectWork)) {
+    return promise;
+  }
+
+  // Queuing failed, so run it here and still settle the promise: an await in
+  // ArkTS must never hang on a runtime refusal.
+  const napi_deferred deferred = item->deferred;
+  delete item;
   harmony_session_connect(sessionId);
-  return BuildInfoObject(env, sessionId);
+  SettlePromise(env, deferred, BuildInfoObject(env, sessionId));
+  return promise;
 }
 
 napi_value DisconnectNapi(napi_env env, napi_callback_info info) {
@@ -504,41 +598,27 @@ napi_value DisconnectNapi(napi_env env, napi_callback_info info) {
   //
   // The returned promise resolves once that teardown is finished, so the
   // caller can order its own bookkeeping after it instead of racing it.
-  napi_deferred deferred = nullptr;
-  napi_value promise = nullptr;
-  if (napi_create_promise(env, &deferred, &promise) != napi_ok) {
-    deferred = nullptr;
-    promise = nullptr;
-  }
-
-  auto* item = new (std::nothrow) DisconnectWorkItem();
-  napi_value resourceName = nullptr;
-  const bool namesOk =
-      (napi_create_string_utf8(env, "FreeRDPHarmonyDisconnect", NAPI_AUTO_LENGTH,
-                               &resourceName) == napi_ok);
-  if ((item == nullptr) || !namesOk) {
-    delete item;
+  auto* item = new (std::nothrow) SessionWorkItem();
+  napi_value promise = (item != nullptr) ? CreateSessionWorkPromise(env, item) : nullptr;
+  if (promise == nullptr) {
     // Cannot defer: fall back to a synchronous teardown rather than leaving a
     // live session behind.
+    delete item;
     harmony_session_disconnect(sessionId);
-    SettleDisconnectPromise(env, deferred);
-    return (promise != nullptr) ? promise : CreateUndefined(env);
+    return CreateUndefined(env);
   }
 
   item->sessionId = sessionId;
-  item->deferred = deferred;
-  if ((napi_create_async_work(env, nullptr, resourceName, ExecuteDisconnectWork,
-                              CompleteDisconnectWork, item, &item->work) != napi_ok) ||
-      (napi_queue_async_work(env, item->work) != napi_ok)) {
-    if (item->work != nullptr) {
-      napi_delete_async_work(env, item->work);
-    }
-    delete item;
-    harmony_session_disconnect(sessionId);
-    SettleDisconnectPromise(env, deferred);
+  if (QueueSessionWork(env, item, "FreeRDPHarmonyDisconnect", ExecuteDisconnectWork,
+                       CompleteDisconnectWork)) {
+    return promise;
   }
 
-  return (promise != nullptr) ? promise : CreateUndefined(env);
+  const napi_deferred deferred = item->deferred;
+  delete item;
+  harmony_session_disconnect(sessionId);
+  SettlePromise(env, deferred, nullptr);
+  return promise;
 }
 
 napi_value GetSessionInfoNapi(napi_env env, napi_callback_info info) {

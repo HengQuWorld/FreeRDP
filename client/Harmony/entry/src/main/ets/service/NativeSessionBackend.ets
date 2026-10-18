@@ -265,7 +265,9 @@ class NativeSessionBackendImpl implements SessionBackend {
 
   async connect(sessionId: number): Promise<SessionState> {
     const record: SessionRecord = this.requireRecord(sessionId);
-    const nativeInfo: NativeSessionInfo = nativeConnect(sessionId);
+    // Resolves once the native side finished building the context; the session
+    // thread keeps working in the background from there.
+    const nativeInfo: NativeSessionInfo = await nativeConnect(sessionId);
     return this.buildState(sessionId, nativeInfo, record.profile);
   }
 

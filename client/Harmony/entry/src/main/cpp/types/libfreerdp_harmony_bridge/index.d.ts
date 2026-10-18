@@ -63,7 +63,7 @@ export interface NativeSessionEvent {
 }
 
 export const createSession: (config: NativeSessionConfig) => number;
-export const connect: (sessionId: number) => NativeSessionInfo;
+export const connect: (sessionId: number) => Promise<NativeSessionInfo>;
 export const disconnect: (sessionId: number) => Promise<void>;
 export const getSessionInfo: (sessionId: number) => NativeSessionInfo;
 export const getSnapshot: (sessionId: number) => NativeSessionSnapshot;
