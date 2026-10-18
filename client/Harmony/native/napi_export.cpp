@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 #include <freerdp/freerdp.h>
@@ -439,6 +440,31 @@ napi_value CreateSessionNapi(napi_env env, napi_callback_info info) {
   return result;
 }
 
+// Executes the session teardown away from the ArkTS main thread. Only native
+// code runs here: no NAPI call is allowed on a worker-pool thread.
+struct DisconnectWorkItem {
+  napi_async_work work = nullptr;
+  std::int32_t sessionId = 0;
+};
+
+void ExecuteDisconnectWork(napi_env /*env*/, void* data) {
+  auto* item = static_cast<DisconnectWorkItem*>(data);
+  if (item != nullptr) {
+    harmony_session_disconnect(item->sessionId);
+  }
+}
+
+void CompleteDisconnectWork(napi_env env, napi_status /*status*/, void* data) {
+  auto* item = static_cast<DisconnectWorkItem*>(data);
+  if (item == nullptr) {
+    return;
+  }
+  if (item->work != nullptr) {
+    napi_delete_async_work(env, item->work);
+  }
+  delete item;
+}
+
 napi_value ConnectNapi(napi_env env, napi_callback_info info) {
   std::int32_t sessionId = 0;
   if (!GetInt32Arg(env, info, &sessionId)) {
@@ -455,7 +481,36 @@ napi_value DisconnectNapi(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  harmony_session_disconnect(sessionId);
+  // ArkTS calls disconnect() from UIAbility lifecycle callbacks such as
+  // SessionAbility.onDestroy, which run on the application main thread. Doing
+  // the whole teardown inline kept that thread inside FreeRDP for as long as
+  // DNS resolution, TLS/NLA negotiation or channel shutdown took, which the
+  // system reported as THREAD_BLOCK_6S (application freeze). Hand it to the
+  // NAPI worker pool so the caller returns immediately.
+  auto* item = new (std::nothrow) DisconnectWorkItem();
+  napi_value resourceName = nullptr;
+  const bool namesOk =
+      (napi_create_string_utf8(env, "FreeRDPHarmonyDisconnect", NAPI_AUTO_LENGTH,
+                               &resourceName) == napi_ok);
+  if ((item == nullptr) || !namesOk) {
+    delete item;
+    // Cannot defer: fall back to a synchronous teardown rather than leaving a
+    // live session behind.
+    harmony_session_disconnect(sessionId);
+    return CreateUndefined(env);
+  }
+
+  item->sessionId = sessionId;
+  if ((napi_create_async_work(env, nullptr, resourceName, ExecuteDisconnectWork,
+                              CompleteDisconnectWork, item, &item->work) != napi_ok) ||
+      (napi_queue_async_work(env, item->work) != napi_ok)) {
+    if (item->work != nullptr) {
+      napi_delete_async_work(env, item->work);
+    }
+    delete item;
+    harmony_session_disconnect(sessionId);
+  }
+
   return CreateUndefined(env);
 }
 
@@ -862,7 +917,13 @@ int harmony_session_connect(int sessionId) {
 }
 
 int harmony_session_disconnect(int sessionId) {
-  return Adapter().Disconnect(sessionId) ? 0 : -1;
+  const bool disconnected = Adapter().Disconnect(sessionId);
+  // Release the session once its teardown is complete. Without this the map
+  // keeps every session (and its full-resolution frame buffer) alive until the
+  // process exits, which is what made repeated connect/disconnect cycles grow
+  // the native heap without ever shrinking it.
+  Adapter().ReleaseSessionIfIdle(sessionId);
+  return disconnected ? 0 : -1;
 }
 
 int harmony_session_get_snapshot(int sessionId, HarmonySurfaceSnapshotC* snapshot) {

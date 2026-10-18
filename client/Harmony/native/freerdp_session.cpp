@@ -59,6 +59,16 @@ static void HiLogError(const std::string& message) {
 constexpr DWORD kWaitTimeoutMs = 100;
 constexpr std::size_t kMaxConnectionHistory = 100;
 
+// Wire logging level handed to FreeRDP. Release builds run with NDEBUG and use
+// WARN: TRACE prints several lines per PDU, which floods the 256 KB hilog ring
+// buffer and pushes out exactly the messages needed to diagnose a real failure.
+// Debug builds keep DEBUG so field investigations still have context.
+#if defined(NDEBUG)
+constexpr const char* kLogLevelArgument = "/log-level:WARN";
+#else
+constexpr const char* kLogLevelArgument = "/log-level:DEBUG";
+#endif
+
 struct HarmonyClientContext {
   rdpClientContext common;
   FreeRDPHarmonySession* session;
@@ -772,6 +782,8 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       clipboardReady_(false),
       started_(false),
       stopRequested_(false),
+      disconnecting_(false),
+      warnedMissingNativeWindow_(false),
       nativeWindow_(nullptr),
       dialogAnswered_(false),
       certAccepted_(false),
@@ -798,6 +810,12 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
   }
 }
 
+void* FreeRDPHarmonySession::TakeContextLocked() {
+  void* context = context_;
+  context_ = nullptr;
+  return context;
+}
+
 FreeRDPHarmonySession::~FreeRDPHarmonySession() {
   Disconnect();
 
@@ -809,8 +827,7 @@ FreeRDPHarmonySession::~FreeRDPHarmonySession() {
   rdpContext* context = nullptr;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    context = static_cast<rdpContext*>(context_);
-    context_ = nullptr;
+    context = static_cast<rdpContext*>(TakeContextLocked());
   }
 
   if (context != nullptr) {
@@ -866,34 +883,26 @@ bool FreeRDPHarmonySession::Connect() {
 
 bool FreeRDPHarmonySession::Disconnect() {
   std::thread worker;
-  rdpContext* context = nullptr;
+  rdpContext* claimed = nullptr;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!started_ || stopRequested_) {
+    // Only one thread may tear a session down. A concurrent caller returning
+    // here is what keeps the context from being released twice.
+    if (disconnecting_) {
       return true;
     }
+    if (!started_ && (context_ == nullptr) && !worker_.joinable()) {
+      return true;
+    }
+    disconnecting_ = true;
     stopRequested_ = true;
-    context = static_cast<rdpContext*>(context_);
     worker = std::move(worker_);
-  }
-
-  HANDLE inputEventHandle = static_cast<HANDLE>(inputEventHandle_);
-  if (inputEventHandle != nullptr) {
-    SetEvent(inputEventHandle);
-  }
-
-  if (context != nullptr) {
-    freerdp_abort_connect_context(context);
-  }
-
-  if (worker.joinable()) {
-    worker.join();
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    started_ = false;
+    // Claim ownership before anything can release it. From this point the
+    // worker thread can no longer obtain this pointer, it will only see null.
+    claimed = static_cast<rdpContext*>(TakeContextLocked());
+    // Publish the terminal state up front: the join below can take a while and
+    // callers polling getSessionInfo() must not keep seeing "connected".
     if (info_.stage != HarmonySessionStage::kFailed) {
       info_.stage = HarmonySessionStage::kDisconnected;
       info_.connected = false;
@@ -902,16 +911,68 @@ bool FreeRDPHarmonySession::Disconnect() {
   }
   stateChanged_.notify_all();
 
-  if (context != nullptr) {
-    freerdp_client_context_free(context);
+  HANDLE inputEventHandle = static_cast<HANDLE>(inputEventHandle_);
+  if (inputEventHandle != nullptr) {
+    SetEvent(inputEventHandle);
+  }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (context_ == context) {
-      context_ = nullptr;
+  if (claimed != nullptr) {
+    freerdp_abort_connect_context(claimed);
+  }
+
+  if (worker.joinable()) {
+    if (worker.get_id() == std::this_thread::get_id()) {
+      // Called from the session thread itself (through a FreeRDP callback).
+      // Joining would deadlock and freeing the context here would pull it out
+      // from under the running loop, so hand everything back and let the next
+      // caller finish the teardown.
+      std::lock_guard<std::mutex> lock(mutex_);
+      if ((claimed != nullptr) && (context_ == nullptr)) {
+        context_ = claimed;
+        claimed = nullptr;
+      }
+      if (!worker_.joinable()) {
+        worker_ = std::move(worker);
+      }
+      disconnecting_ = false;
+      return true;
     }
+    worker.join();
+  }
+
+  rdpContext* leftover = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Connection retries may have rebuilt a context while we were aborting;
+    // claim whatever is left so it is released exactly once.
+    leftover = static_cast<rdpContext*>(TakeContextLocked());
+    started_ = false;
+    disconnecting_ = false;
+    if (info_.stage != HarmonySessionStage::kFailed) {
+      info_.stage = HarmonySessionStage::kDisconnected;
+      info_.connected = false;
+      info_.message = "session.disconnected";
+    }
+  }
+  stateChanged_.notify_all();
+
+  if (claimed != nullptr) {
+    freerdp_client_stop(claimed);
+    freerdp_client_context_free(claimed);
+  }
+  if (leftover != nullptr) {
+    freerdp_client_stop(leftover);
+    freerdp_client_context_free(leftover);
   }
 
   return true;
+}
+
+bool FreeRDPHarmonySession::IsTeardownComplete() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  // worker_ is only left joinable while a session thread still exists: the
+  // self-thread path in Disconnect() hands it back instead of detaching.
+  return !started_ && !disconnecting_ && !worker_.joinable();
 }
 
 HarmonySurfaceSnapshot FreeRDPHarmonySession::GetSnapshot() const {
@@ -1261,6 +1322,7 @@ void FreeRDPHarmonySession::SetSurfaceId(const std::string& surfaceIdStr) {
     } catch (...) { return; }
     OH_NativeWindow_CreateNativeWindowFromSurfaceId(surfaceId, &nativeWindow_);
     if (nativeWindow_ != nullptr) {
+      warnedMissingNativeWindow_ = false;
       const uint64_t usage = NATIVEBUFFER_USAGE_CPU_READ | NATIVEBUFFER_USAGE_CPU_WRITE |
                              NATIVEBUFFER_USAGE_MEM_DMA | NATIVEBUFFER_USAGE_HW_RENDER;
       const int32_t usageRet =
@@ -1376,8 +1438,14 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
     } else {
       HiLogError("UpdateFrame: NativeWindowRequestBuffer failed with ret=" + std::to_string(ret));
     }
-  } else {
-    HiLogError("UpdateFrame: nativeWindow_ is null!");
+  } else if (!warnedMissingNativeWindow_) {
+    // Frames are rendered by ArkTS from the frame buffer, so no native window
+    // is bound in the current UI. Report that once instead of once per frame:
+    // at ~1.5 frames/s an unconditional error log floods the hilog ring buffer
+    // and pushes out real diagnostics.
+    warnedMissingNativeWindow_ = true;
+    HiLogInfo(
+        "UpdateFrame: no native window bound, frames go through the shared frame buffer");
   }
 
   if (!hasPendingFrameEvent_) {
@@ -1710,7 +1778,7 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   }
   
   // 日志级别
-  args.emplace_back("/log-level:TRACE");
+  args.emplace_back(kLogLevelArgument);
   args.emplace_back(config_.enableClipboard ? "/clipboard" : "-clipboard");
 
   if (config_.enableAudio) {
@@ -1935,7 +2003,16 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
     }
     
     if (context == nullptr || context->instance == nullptr) {
-      UpdateStage(HarmonySessionStage::kFailed, 1, "error.rdp_context_unavailable");
+      // When Disconnect() claimed the context, the session is already being torn
+      // down; do not overwrite the terminal state it published.
+      bool stopping = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopping = stopRequested_;
+      }
+      if (!stopping) {
+        UpdateStage(HarmonySessionStage::kFailed, 1, "error.rdp_context_unavailable");
+      }
       break;
     }
     
@@ -1943,7 +2020,14 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
     std::array<HANDLE, MAXIMUM_WAIT_OBJECTS> handles = {};
     
     if (freerdp_client_start(context) != 0) {
-      UpdateStage(HarmonySessionStage::kFailed, 1, "error.start_client");
+      bool stopping = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stopping = stopRequested_;
+      }
+      if (!stopping) {
+        UpdateStage(HarmonySessionStage::kFailed, 1, "error.start_client");
+      }
       break;
     }
     
@@ -2047,19 +2131,39 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
       freerdp_disconnect(instance);
       freerdp_client_stop(context);
     } else {
-      // 连接失败，记录错误
+      // 连接失败或被取消
       const std::uint32_t lastError = freerdp_get_last_error(context);
       const char* lastErrorString = freerdp_get_last_error_string(lastError);
       std::string errorStr = lastErrorString ? lastErrorString : "unknown";
 
-      // 保存错误类型用于下一次尝试的优化
-      lastErrorType_ = errorStr;
-      
-      HiLogError("Connection failed on attempt " + std::to_string(currentConnectionAttempt_ + 1) + 
-                 ", error: " + errorStr);
-      
+      // A stop request makes freerdp_connect() fail with
+      // ERRCONNECT_CONNECT_CANCELLED. That is a normal user action, not a
+      // fault: logging it at error level inflates the failure rate in crash
+      // and quality reports and hides real failures.
+      bool cancelled = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cancelled = stopRequested_;
+      }
+
+      if (cancelled) {
+        HiLogInfo("Connection attempt " + std::to_string(currentConnectionAttempt_ + 1) +
+                  " cancelled by user request");
+      } else {
+        // 保存错误类型用于下一次尝试的优化
+        lastErrorType_ = errorStr;
+        HiLogError("Connection failed on attempt " +
+                   std::to_string(currentConnectionAttempt_ + 1) + ", error: " + errorStr);
+      }
+
       freerdp_client_stop(context);
-      
+
+      // A stop request owns the final state: leave it to Disconnect(). Losing
+      // that race would report a failure for a session the user just closed.
+      if (cancelled) {
+        break;
+      }
+
       // 检查是否还有更多尝试
       if (!PrepareNextConnectionAttempt()) {
         UpdateStage(HarmonySessionStage::kFailed, lastError,
@@ -2068,17 +2172,36 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
       }
       
       // 释放上下文并准备重试
+      rdpContext* stale = nullptr;
+      bool stopping = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (context_ != nullptr) {
-          freerdp_client_context_free(static_cast<rdpContext*>(context_));
-          context_ = nullptr;
-        }
+        stopping = stopRequested_;
+        // Take ownership so this thread is the only one releasing the context.
+        stale = static_cast<rdpContext*>(TakeContextLocked());
       }
-      
-      // 短暂延迟后重试
-      std::this_thread::sleep_for(std::chrono::milliseconds(500));
-      
+      if (stale != nullptr) {
+        freerdp_client_context_free(stale);
+      }
+      if (stopping) {
+        break;
+      }
+
+      // 短暂延迟后重试（可被 Disconnect 打断）
+      for (int waited = 0; waited < 500; waited += 50) {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (stopRequested_) {
+            stopping = true;
+            break;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      if (stopping) {
+        break;
+      }
+
       // 重新创建上下文
       if (!EnsureContext()) {
         break;

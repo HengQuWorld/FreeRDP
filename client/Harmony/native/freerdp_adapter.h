@@ -97,6 +97,10 @@ class FreeRDPHarmonyAdapter {
   int CreateSession(const HarmonySessionConfig& config);
   bool Connect(int sessionId);
   bool Disconnect(int sessionId);
+  // Erases the session and drops its last reference once its teardown has
+  // finished, releasing the frame buffer and the native handles it owned.
+  // Returns false when the session is unknown or still tearing down.
+  bool ReleaseSessionIfIdle(int sessionId);
   HarmonySurfaceSnapshot GetSnapshot(int sessionId) const;
   HarmonySessionInfo GetInfo(int sessionId) const;
   std::uint32_t GetFrameStride(int sessionId) const;

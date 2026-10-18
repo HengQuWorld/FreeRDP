@@ -1,6 +1,18 @@
 #include "freerdp_adapter.h"
 
+#include <hilog/log.h>
+
 #include "freerdp_session.h"
+
+#ifdef LOG_DOMAIN
+#undef LOG_DOMAIN
+#endif
+#define LOG_DOMAIN 0x3201
+
+#ifdef LOG_TAG
+#undef LOG_TAG
+#endif
+#define LOG_TAG "freerdp_harmony"
 
 FreeRDPHarmonyAdapter::FreeRDPHarmonyAdapter() : nextSessionId_(1) {}
 
@@ -39,6 +51,26 @@ bool FreeRDPHarmonyAdapter::Disconnect(int sessionId) {
   }
 
   return session->Disconnect();
+}
+
+bool FreeRDPHarmonyAdapter::ReleaseSessionIfIdle(int sessionId) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = sessions_.find(sessionId);
+  if (it == sessions_.end()) {
+    return false;
+  }
+  // A session may outlive its first Disconnect() call: while a teardown is in
+  // flight, or after the session thread asked for deferred cleanup. Keep it
+  // until that work is finished, otherwise the session thread would be left
+  // running against freed memory.
+  if (!it->second->IsTeardownComplete()) {
+    return false;
+  }
+  sessions_.erase(it);
+  // One line per released session: it is the only observable proof that the
+  // native buffers (a full-resolution frame buffer per session) were returned.
+  OH_LOG_INFO(LOG_APP, "Released session %{public}d after teardown", sessionId);
+  return true;
 }
 
 HarmonySurfaceSnapshot FreeRDPHarmonyAdapter::GetSnapshot(int sessionId) const {

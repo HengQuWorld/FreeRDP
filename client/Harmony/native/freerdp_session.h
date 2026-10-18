@@ -26,6 +26,10 @@ class FreeRDPHarmonySession {
   bool Connect();
   bool Disconnect();
 
+  // True once no thread can still be running inside the session, so the caller
+  // may destroy it. False while a teardown is in flight.
+  bool IsTeardownComplete() const;
+
   HarmonySurfaceSnapshot GetSnapshot() const;
   HarmonySessionInfo GetInfo() const;
   std::uint32_t GetFrameStride() const;
@@ -82,6 +86,16 @@ class FreeRDPHarmonySession {
     std::uint16_t codepoint;
   };
 
+  // Detaches the current RDP context from the session. The caller becomes the
+  // sole owner of the returned pointer and must free it once every thread that
+  // could still use it is gone. Requires mutex_ to be held.
+  //
+  // This is the only legal way to obtain a context for release: taking a raw
+  // snapshot and freeing it later lets the worker thread release the same
+  // pointer first, which is what produced the SEGV_MAPERR crashes in
+  // freerdp_client_context_free reported by AppGallery Connect.
+  void* TakeContextLocked();
+
   bool EnsureContext();
   bool ApplySettings(void* settings, std::string& outError);
   std::vector<std::string> BuildCommandLineArgs() const;
@@ -117,6 +131,8 @@ class FreeRDPHarmonySession {
   std::string localClipboardText_;
   bool started_;
   bool stopRequested_;
+  bool disconnecting_;
+  bool warnedMissingNativeWindow_;
   std::thread worker_;
   NativeWindow* nativeWindow_;
 
