@@ -24,6 +24,7 @@ class SessionManagerImpl {
   private cnDiscoveredListeners: Set<CertCommonNameDiscoveredCallback> = new Set();
   private cnNotifiedSessionIds: Set<number> = new Set();
   private lastObservedFrameSequences: Map<number, number> = new Map();
+  private pendingDisconnects: Map<number, Promise<void>> = new Map();
 
   onChanged(callback: SessionChangedCallback): () => void {
     this.listeners.add(callback);
@@ -153,7 +154,50 @@ class SessionManagerImpl {
       return;
     }
 
+    // Teardown takes a while. A second caller (window close during a hang-up,
+    // the ability lifecycle firing while the page is still tearing down) must
+    // wait for the teardown already in flight instead of starting another one,
+    // whose early return would let it race ahead of the real teardown.
+    const inFlight: Promise<void> | undefined = this.pendingDisconnects.get(sessionId);
+    if (inFlight !== undefined) {
+      await inFlight;
+      return;
+    }
+
+    const teardown: Promise<void> = this.runDisconnect(sessionId);
+    this.pendingDisconnects.set(sessionId, teardown);
+    try {
+      await teardown;
+    } finally {
+      this.pendingDisconnects.delete(sessionId);
+    }
+  }
+
+  // Disconnects and drops the record only once the native teardown is done.
+  async disconnectAndRemove(sessionId: number): Promise<void> {
+    await this.disconnect(sessionId);
+    this.removeSession(sessionId);
+  }
+
+  private async runDisconnect(sessionId: number): Promise<void> {
     this.stopEventPolling(sessionId);
+
+    // Publish the terminal state before waiting. Teardown can take as long as
+    // the network takes to give up, and the UI must not keep showing a session
+    // the user just closed. The record itself stays until the teardown has
+    // really finished, so lookups during that window still resolve.
+    const record: SessionRecord | undefined = this.sessions.get(sessionId);
+    if (record !== undefined) {
+      record.state = {
+        sessionId: record.state.sessionId,
+        stage: SessionStage.Disconnected,
+        title: record.state.title,
+        message: i18n.get(i18n.currentLocale(), 'session.disconnected'),
+        profile: record.state.profile,
+        certCommonName: record.state.certCommonName
+      };
+      this.notifyChanged();
+    }
 
     try {
       await sessionBridge.disconnect(sessionId);
@@ -161,16 +205,6 @@ class SessionManagerImpl {
     } catch (e) {
       logger.error(LogTags.SESSION_MANAGER, `Failed to disconnect session ${sessionId}`, e);
     }
-
-    record.state = {
-      sessionId: record.state.sessionId,
-      stage: SessionStage.Disconnected,
-      title: record.state.title,
-      message: i18n.get(i18n.currentLocale(), 'session.disconnected'),
-      profile: record.state.profile,
-      certCommonName: record.state.certCommonName
-    };
-    this.notifyChanged();
   }
 
   removeSession(sessionId: number): void {
@@ -393,14 +427,17 @@ class SessionManagerImpl {
     }
   }
 
-  disconnectAll(): void {
+  // Resolves once every session is torn down and removed, so a caller that is
+  // wiping application state can wait for it instead of racing it.
+  async disconnectAll(): Promise<void> {
     const sessionIds: number[] = [];
     this.sessions.forEach((_: SessionRecord, sessionId: number) => {
       sessionIds.push(sessionId);
     });
-    sessionIds.forEach((sessionId: number) => {
-      void this.disconnect(sessionId);
+    const teardowns: Promise<void>[] = sessionIds.map((sessionId: number) => {
+      return this.disconnectAndRemove(sessionId);
     });
+    await Promise.all(teardowns);
   }
 }
 

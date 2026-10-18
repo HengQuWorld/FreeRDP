@@ -271,7 +271,8 @@ class NativeSessionBackendImpl implements SessionBackend {
 
   async disconnect(sessionId: number): Promise<void> {
     this.requireRecord(sessionId);
-    nativeDisconnect(sessionId);
+    // Resolves once the native teardown has finished, not when it is queued.
+    await nativeDisconnect(sessionId);
   }
 
   getState(sessionId: number): SessionState {

@@ -109,8 +109,10 @@ export default class SessionAbility extends UIAbility {
         const record: SessionRecord | undefined = sessionManager.getSession(this.sessionId);
         if (record !== undefined) {
           logger.info(LogTags.SESSION_ABILITY, `Disconnecting and removing session ${this.sessionId}`);
-          void sessionManager.disconnect(this.sessionId);
-          sessionManager.removeSession(this.sessionId);
+          // Order matters: the record must outlive the native teardown. Dropping
+          // it first let getSession() return undefined while the native session
+          // was still shutting down, which surfaced as "session not found".
+          void sessionManager.disconnectAndRemove(this.sessionId);
         } else {
           logger.warn(LogTags.SESSION_ABILITY, `Session ${this.sessionId} not found during cleanup`);
         }

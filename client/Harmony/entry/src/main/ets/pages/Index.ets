@@ -514,8 +514,7 @@ struct Index {
         const msg = i18n.get(this.appLanguage, 'open_window_failed');
         this.homeViewModel.lastMessage = msg;
         this.showToast(msg, true);
-        await sessionManager.disconnect(sessionId);
-        sessionManager.removeSession(sessionId);
+        await sessionManager.disconnectAndRemove(sessionId);
       } else {
         const msg = `${i18n.get(this.appLanguage, 'connected_to')} ${profile.host}${i18n.get(this.appLanguage, 'remote_window_opened')}`;
         this.homeViewModel.lastMessage = msg;

@@ -90,12 +90,19 @@ class SessionWindowManagerImpl {
 
   async closeSessionWindow(sessionId: number): Promise<void> {
     const session: SessionRecord | undefined = sessionManager.getSession(sessionId);
-    if (session !== undefined && (session.state.stage === SessionStage.Connected ||
-        session.state.stage === SessionStage.Connecting)) {
-      await sessionManager.disconnect(sessionId);
-    }
-    sessionManager.removeSession(sessionId);
+    const connected: boolean = session !== undefined &&
+        (session.state.stage === SessionStage.Connected ||
+         session.state.stage === SessionStage.Connecting);
+
+    // The window is gone now, whatever the network is still doing: drop the
+    // record only after the native teardown finished, but tell the shell
+    // immediately.
     this.notifyWindowClosed(sessionId);
+    if (connected) {
+      await sessionManager.disconnectAndRemove(sessionId);
+    } else {
+      sessionManager.removeSession(sessionId);
+    }
   }
 
   async closeAllWindows(): Promise<void> {
