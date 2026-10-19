@@ -106,6 +106,16 @@ class FreeRDPHarmonySession {
   std::vector<std::string> BuildCommandLineArgs() const;
   bool QueueInputEvent(const InputEvent& event);
   bool ProcessInputEvents(void* input);
+
+  // Pins the native buffer geometry to the RDP desktop size. Requires mutex_ to
+  // be held. Returns true when the window is bound to the requested size.
+  bool EnsureNativeWindowGeometryLocked(std::uint32_t width, std::uint32_t height);
+  // Writes the current frame into a native buffer and flushes it. Requires
+  // mutex_ to be held.
+  void PresentToNativeWindowLocked(std::uint32_t width, std::uint32_t height,
+                                   std::uint32_t left, std::uint32_t top,
+                                   std::uint32_t dirtyWidth, std::uint32_t dirtyHeight,
+                                   const std::uint8_t* data, std::uint32_t stride);
   void ThreadMain();
   void ThreadMainWithRetry();
   
@@ -142,6 +152,17 @@ class FreeRDPHarmonySession {
   bool warnedMissingNativeWindow_;
   std::thread worker_;
   NativeWindow* nativeWindow_;
+  // Last geometry applied to nativeWindow_. A surface created before the first
+  // UpdateSnapshot arrives is sized by the view, not by the desktop, so this is
+  // tracked here and re-applied from UpdateFrame.
+  std::uint32_t nativeGeometryWidth_;
+  std::uint32_t nativeGeometryHeight_;
+  // Native buffer setup failures repeat on every frame; report one per surface
+  // binding so a real failure is still visible without flooding hilog.
+  bool warnedNativeWindowFailure_;
+  // True while frames are presented through the native window instead of the
+  // shared frame buffer, which therefore holds an out-of-date frame.
+  bool frameBufferStale_;
 
   // Authentication & Certificate Dialog State
   mutable std::mutex dialogMutex_;

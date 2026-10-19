@@ -90,4 +90,9 @@ else()
   # Header-only check that a cancelled connect is not reported as a failure.
   add_executable(test_cancellation_noise test_cancellation_noise.cpp)
   target_include_directories(test_cancellation_noise PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+  # Header-only check that the native window damage rect stays inside the
+  # copied desktop and is never empty for a frame that was written.
+  add_executable(test_damage_rect test_damage_rect.cpp)
+  target_include_directories(test_damage_rect PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

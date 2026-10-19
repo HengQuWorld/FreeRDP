@@ -2,6 +2,7 @@
 
 #include "cancellation_noise.h"
 #include "command_line_redaction.h"
+#include "native_window_damage.h"
 
 #include <algorithm>
 #include <array>
@@ -830,6 +831,10 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       disconnecting_(false),
       warnedMissingNativeWindow_(false),
       nativeWindow_(nullptr),
+      nativeGeometryWidth_(0),
+      nativeGeometryHeight_(0),
+      warnedNativeWindowFailure_(false),
+      frameBufferStale_(false),
       dialogAnswered_(false),
       certAccepted_(false),
       currentConnectionAttempt_(0),
@@ -1364,33 +1369,203 @@ void FreeRDPHarmonySession::SetSurfaceId(const std::string& surfaceIdStr) {
     OH_NativeWindow_DestroyNativeWindow(nativeWindow_);
     nativeWindow_ = nullptr;
   }
-  if (!surfaceIdStr.empty()) {
-    uint64_t surfaceId = 0;
-    try {
-      surfaceId = std::stoull(surfaceIdStr);
-    } catch (...) { return; }
-    OH_NativeWindow_CreateNativeWindowFromSurfaceId(surfaceId, &nativeWindow_);
-    if (nativeWindow_ != nullptr) {
-      warnedMissingNativeWindow_ = false;
-      const uint64_t usage = NATIVEBUFFER_USAGE_CPU_READ | NATIVEBUFFER_USAGE_CPU_WRITE |
-                             NATIVEBUFFER_USAGE_MEM_DMA | NATIVEBUFFER_USAGE_HW_RENDER;
-      const int32_t usageRet =
-          OH_NativeWindow_NativeWindowHandleOpt(nativeWindow_, SET_USAGE, usage);
-      const int32_t formatRet = OH_NativeWindow_NativeWindowHandleOpt(
-          nativeWindow_, SET_FORMAT, NATIVEBUFFER_PIXEL_FMT_BGRA_8888);
-      // We must configure the window's geometry to match the RDP desktop geometry before drawing.
-      // FreeRDP starts and provides snapshot_.width and snapshot_.height in UpdateSnapshot.
-      // Wait, we can only set geometry if it's > 0, but during SetSurfaceId it might be 0.
-      if (snapshot_.width > 0 && snapshot_.height > 0) {
-        const int32_t geometryRet = OH_NativeWindow_NativeWindowHandleOpt(
-            nativeWindow_, SET_BUFFER_GEOMETRY, snapshot_.width, snapshot_.height);
-        HiLogInfo("SetSurfaceId geometry ret=" + std::to_string(geometryRet) + " size=" +
-                  std::to_string(snapshot_.width) + "x" + std::to_string(snapshot_.height));
+  nativeGeometryWidth_ = 0;
+  nativeGeometryHeight_ = 0;
+  warnedNativeWindowFailure_ = false;
+  if (surfaceIdStr.empty()) {
+    // The shared buffer stops being updated while a native window is bound, so
+    // it may hold a frame from before the binding. Drop it instead of letting
+    // the ArkTS fallback render stale pixels; the next UpdateFrame refills it.
+    if (frameBufferStale_) {
+      frameBuffer_.clear();
+      frameBufferStale_ = false;
+    }
+    return;
+  }
+
+  uint64_t surfaceId = 0;
+  try {
+    surfaceId = std::stoull(surfaceIdStr);
+  } catch (...) { return; }
+  OH_NativeWindow_CreateNativeWindowFromSurfaceId(surfaceId, &nativeWindow_);
+  if (nativeWindow_ == nullptr) {
+    HiLogError("SetSurfaceId failed to create NativeWindow.");
+    return;
+  }
+
+  warnedMissingNativeWindow_ = false;
+  // CPU_READ/WRITE are required for the memcpy path below. HW_RENDER lets the
+  // compositor take the buffer without a GPU round trip.
+  const uint64_t usage = NATIVEBUFFER_USAGE_CPU_READ | NATIVEBUFFER_USAGE_CPU_WRITE |
+                         NATIVEBUFFER_USAGE_MEM_DMA | NATIVEBUFFER_USAGE_HW_RENDER;
+  const int32_t usageRet = OH_NativeWindow_NativeWindowHandleOpt(nativeWindow_, SET_USAGE, usage);
+  const int32_t formatRet = OH_NativeWindow_NativeWindowHandleOpt(
+      nativeWindow_, SET_FORMAT, NATIVEBUFFER_PIXEL_FMT_BGRA_8888);
+  HiLogInfo("SetSurfaceId configured NativeWindow. usageRet=" + std::to_string(usageRet) +
+            " formatRet=" + std::to_string(formatRet));
+
+  // The surface usually arrives before the first UpdateSnapshot, so the desktop
+  // size may still be unknown here. UpdateFrame re-applies the geometry once it
+  // is known; see EnsureNativeWindowGeometryLocked.
+  if ((snapshot_.width > 0) && (snapshot_.height > 0)) {
+    EnsureNativeWindowGeometryLocked(snapshot_.width, snapshot_.height);
+  }
+}
+
+bool FreeRDPHarmonySession::EnsureNativeWindowGeometryLocked(std::uint32_t width,
+                                                             std::uint32_t height) {
+  if ((nativeWindow_ == nullptr) || (width == 0) || (height == 0)) {
+    return false;
+  }
+  if ((nativeGeometryWidth_ == width) && (nativeGeometryHeight_ == height)) {
+    return true;
+  }
+
+  const int32_t ret = OH_NativeWindow_NativeWindowHandleOpt(
+      nativeWindow_, SET_BUFFER_GEOMETRY, static_cast<int32_t>(width),
+      static_cast<int32_t>(height));
+  if (ret != 0) {
+    HiLogError("NativeWindow SET_BUFFER_GEOMETRY failed ret=" + std::to_string(ret) + " size=" +
+               std::to_string(width) + "x" + std::to_string(height));
+    return false;
+  }
+
+  nativeGeometryWidth_ = width;
+  nativeGeometryHeight_ = height;
+  HiLogInfo("NativeWindow geometry set to " + std::to_string(width) + "x" +
+            std::to_string(height));
+  return true;
+}
+
+void FreeRDPHarmonySession::PresentToNativeWindowLocked(
+    std::uint32_t width, std::uint32_t height, std::uint32_t left, std::uint32_t top,
+    std::uint32_t dirtyWidth, std::uint32_t dirtyHeight, const std::uint8_t* data,
+    std::uint32_t stride) {
+  if ((nativeWindow_ == nullptr) || (data == nullptr)) {
+    return;
+  }
+
+  // A surface created before the desktop size was known is sized by the view;
+  // pin it to the RDP geometry before asking for a buffer, otherwise the rows
+  // past the view height are clipped away by the copy below.
+  EnsureNativeWindowGeometryLocked(width, height);
+
+  OHNativeWindowBuffer* buffer = nullptr;
+  int fenceFd = -1;
+  BufferHandle* handle = nullptr;
+
+  // A buffer allocated before the geometry change can still carry the old
+  // dimensions. Re-apply the geometry and retry once; the copy below is
+  // clamped either way, so a second mismatch only costs a scaled frame.
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    buffer = nullptr;
+    fenceFd = -1;
+    const int32_t ret = OH_NativeWindow_NativeWindowRequestBuffer(nativeWindow_, &buffer, &fenceFd);
+    if ((ret != 0) || (buffer == nullptr)) {
+      if (!warnedNativeWindowFailure_) {
+        warnedNativeWindowFailure_ = true;
+        HiLogError("UpdateFrame: NativeWindowRequestBuffer failed with ret=" +
+                   std::to_string(ret));
       }
-      HiLogInfo("SetSurfaceId configured NativeWindow successfully. usageRet=" +
-                std::to_string(usageRet) + " formatRet=" + std::to_string(formatRet));
-    } else {
-      HiLogError("SetSurfaceId failed to create NativeWindow.");
+      return;
+    }
+
+    handle = OH_NativeWindow_GetBufferHandleFromNative(buffer);
+    if (handle == nullptr) {
+      break;  // reported by the common failure path below
+    }
+    if ((static_cast<std::uint32_t>(handle->width) == width) &&
+        (static_cast<std::uint32_t>(handle->height) == height)) {
+      break;
+    }
+    if (attempt == 1) {
+      break;
+    }
+
+    if (fenceFd >= 0) {
+      close(fenceFd);
+      fenceFd = -1;
+    }
+    OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
+    buffer = nullptr;
+    nativeGeometryWidth_ = 0;
+    nativeGeometryHeight_ = 0;
+    EnsureNativeWindowGeometryLocked(width, height);
+  }
+
+  if (buffer == nullptr) {
+    return;
+  }
+
+  OH_NativeBuffer* nativeBuffer = nullptr;
+  const int32_t convertRet = OH_NativeBuffer_FromNativeWindowBuffer(buffer, &nativeBuffer);
+  void* mappedAddr = nullptr;
+  const int32_t mapRet =
+      (convertRet == 0 && nativeBuffer != nullptr) ? OH_NativeBuffer_Map(nativeBuffer, &mappedAddr) : -1;
+
+  if ((handle == nullptr) || (mappedAddr == nullptr)) {
+    if (!warnedNativeWindowFailure_) {
+      warnedNativeWindowFailure_ = true;
+      std::ostringstream stream;
+      stream << "UpdateFrame: map failed convertRet=" << convertRet << " mapRet=" << mapRet;
+      if (handle != nullptr) {
+        stream << " handle={w=" << handle->width << ",h=" << handle->height
+               << ",stride=" << handle->stride << ",size=" << handle->size
+               << ",format=" << handle->format << ",usage=" << handle->usage
+               << ",virAddr=" << handle->virAddr << "}";
+      } else {
+        stream << " handle=null";
+      }
+      HiLogError(stream.str());
+    }
+    if (fenceFd >= 0) {
+      close(fenceFd);
+      fenceFd = -1;
+    }
+    OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
+    return;
+  }
+
+  // Copy the whole frame rather than just the dirty rect. Buffers cycle through
+  // a queue, so the buffer handed to us may still hold the frame from N-2; the
+  // damage region below only tells the compositor what to recompose, it does
+  // not leave the rest of the buffer intact. Only the flush region is narrowed.
+  uint8_t* dst = static_cast<uint8_t*>(mappedAddr);
+  const uint8_t* src = data;
+  const uint32_t copyWidth = std::min<uint32_t>(width, static_cast<uint32_t>(handle->width)) * 4U;
+  const uint32_t copyHeight = std::min<uint32_t>(height, static_cast<uint32_t>(handle->height));
+  const uint32_t srcStride = stride;
+  const uint32_t dstStride = static_cast<uint32_t>(handle->stride);
+  const uint32_t rowBytes = std::min<uint32_t>(copyWidth, std::min<uint32_t>(srcStride, dstStride));
+  for (uint32_t y = 0; y < copyHeight; ++y) {
+    memcpy(dst + static_cast<std::size_t>(y) * dstStride,
+           src + static_cast<std::size_t>(y) * srcStride, rowBytes);
+  }
+
+  OH_NativeBuffer_Unmap(nativeBuffer);
+  if (fenceFd >= 0) {
+    close(fenceFd);
+    fenceFd = -1;
+  }
+
+  // Clamp the damage rect to what was actually copied. FreeRDP reports a union
+  // that a resize can already have outgrown, and an out-of-range or empty rect
+  // makes the compositor skip the flush.
+  const freerdp_harmony::FrameRect damage = freerdp_harmony::ComputeDamageRect(
+      left, top, dirtyWidth, dirtyHeight, width, height, copyWidth / 4U, copyHeight);
+
+  struct Region region;
+  struct Region::Rect dirtyRect = { static_cast<int32_t>(damage.left),
+                                    static_cast<int32_t>(damage.top), damage.width,
+                                    damage.height };
+  region.rects = &dirtyRect;
+  region.rectNumber = (damage.width > 0 && damage.height > 0) ? 1 : 0;
+
+  const int32_t flushRet = OH_NativeWindow_NativeWindowFlushBuffer(nativeWindow_, buffer, -1, region);
+  if (flushRet != 0) {
+    if (!warnedNativeWindowFailure_) {
+      warnedNativeWindowFailure_ = true;
+      HiLogError("UpdateFrame: FlushBuffer failed ret=" + std::to_string(flushRet));
     }
   }
 }
@@ -1414,87 +1589,25 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
   snapshot_.dirtyWidth = dirtyWidth;
   snapshot_.dirtyHeight = dirtyHeight;
   frameStride_ = stride;
-  frameBuffer_.assign(data, data + requiredSize);
   frameSequence_ += 1;
-  
+
   if (nativeWindow_ != nullptr) {
-    OHNativeWindowBuffer* buffer = nullptr;
-    int fenceFd = -1;
-    int32_t ret = OH_NativeWindow_NativeWindowRequestBuffer(nativeWindow_, &buffer, &fenceFd);
-    if (ret == 0 && buffer != nullptr) {
-      BufferHandle* handle = OH_NativeWindow_GetBufferHandleFromNative(buffer);
-      OH_NativeBuffer* nativeBuffer = nullptr;
-      const int32_t convertRet = OH_NativeBuffer_FromNativeWindowBuffer(buffer, &nativeBuffer);
-      void* mappedAddr = nullptr;
-      const int32_t mapRet =
-          (convertRet == 0 && nativeBuffer != nullptr) ? OH_NativeBuffer_Map(nativeBuffer, &mappedAddr) : -1;
-
-      if (handle != nullptr && mappedAddr != nullptr) {
-         uint8_t* dst = static_cast<uint8_t*>(mappedAddr);
-         const uint8_t* src = data;
-
-         const uint32_t copyWidth = std::min<uint32_t>(width, static_cast<uint32_t>(handle->width)) * 4;
-         const uint32_t copyHeight = std::min<uint32_t>(height, static_cast<uint32_t>(handle->height));
-         const uint32_t srcStride = stride;
-         const uint32_t dstStride = static_cast<uint32_t>(handle->stride);
-         const uint32_t rowBytes = std::min<uint32_t>(copyWidth, std::min<uint32_t>(srcStride, dstStride));
-
-         for (uint32_t y = 0; y < copyHeight; ++y) {
-           memcpy(dst + y * dstStride, src + y * srcStride, rowBytes);
-         }
-
-         OH_NativeBuffer_Unmap(nativeBuffer);
-         if (fenceFd >= 0) {
-           close(fenceFd);
-           fenceFd = -1;
-         }
-
-         struct Region region;
-         struct Region::Rect dirtyRect = { static_cast<int32_t>(left), static_cast<int32_t>(top),
-                                           static_cast<uint32_t>(dirtyWidth), static_cast<uint32_t>(dirtyHeight) };
-         region.rects = &dirtyRect;
-         region.rectNumber = 1;
-
-         const int32_t flushRet =
-             OH_NativeWindow_NativeWindowFlushBuffer(nativeWindow_, buffer, -1, region);
-         if (flushRet != 0) {
-           HiLogError("UpdateFrame: FlushBuffer failed ret=" + std::to_string(flushRet));
-         }
-      } else {
-         std::ostringstream stream;
-         stream << "UpdateFrame: map failed requestRet=" << ret
-                << " convertRet=" << convertRet
-                << " mapRet=" << mapRet;
-         if (handle != nullptr) {
-           stream << " handle={w=" << handle->width
-                  << ",h=" << handle->height
-                  << ",stride=" << handle->stride
-                  << ",size=" << handle->size
-                  << ",format=" << handle->format
-                  << ",usage=" << handle->usage
-                  << ",virAddr=" << handle->virAddr
-                  << "}";
-         } else {
-           stream << " handle=null";
-         }
-         HiLogError(stream.str());
-         if (fenceFd >= 0) {
-           close(fenceFd);
-           fenceFd = -1;
-         }
-         OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
-      }
-    } else {
-      HiLogError("UpdateFrame: NativeWindowRequestBuffer failed with ret=" + std::to_string(ret));
+    // Present straight from the RDP primary buffer: the shared frame buffer is
+    // only read by ArkTS, which no longer renders while a surface is bound.
+    frameBufferStale_ = true;
+    PresentToNativeWindowLocked(width, height, left, top, dirtyWidth, dirtyHeight, data, stride);
+  } else {
+    frameBuffer_.assign(data, data + requiredSize);
+    frameBufferStale_ = false;
+    if (!warnedMissingNativeWindow_) {
+      // Frames are rendered by ArkTS from the frame buffer, so no native window
+      // is bound in the current UI. Report that once instead of once per frame:
+      // at ~1.5 frames/s an unconditional error log floods the hilog ring buffer
+      // and pushes out real diagnostics.
+      warnedMissingNativeWindow_ = true;
+      HiLogInfo(
+          "UpdateFrame: no native window bound, frames go through the shared frame buffer");
     }
-  } else if (!warnedMissingNativeWindow_) {
-    // Frames are rendered by ArkTS from the frame buffer, so no native window
-    // is bound in the current UI. Report that once instead of once per frame:
-    // at ~1.5 frames/s an unconditional error log floods the hilog ring buffer
-    // and pushes out real diagnostics.
-    warnedMissingNativeWindow_ = true;
-    HiLogInfo(
-        "UpdateFrame: no native window bound, frames go through the shared frame buffer");
   }
 
   if (!hasPendingFrameEvent_) {
@@ -1511,14 +1624,7 @@ void FreeRDPHarmonySession::UpdateSnapshot(std::uint32_t width, std::uint32_t he
                                            std::uint32_t dirtyWidth,
                                            std::uint32_t dirtyHeight) {
   std::lock_guard<std::mutex> lock(mutex_);
-  
-  if (nativeWindow_ != nullptr && (snapshot_.width != width || snapshot_.height != height)) {
-    const int32_t geometryRet =
-        OH_NativeWindow_NativeWindowHandleOpt(nativeWindow_, SET_BUFFER_GEOMETRY, width, height);
-    HiLogInfo("UpdateSnapshot geometry ret=" + std::to_string(geometryRet) + " size=" +
-              std::to_string(width) + "x" + std::to_string(height));
-  }
-  
+  EnsureNativeWindowGeometryLocked(width, height);
   snapshot_.width = width;
   snapshot_.height = height;
   snapshot_.dirtyLeft = left;
