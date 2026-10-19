@@ -3,6 +3,12 @@
 Notable user-facing changes in the HarmonyOS client.
 App releases use the `1.x` tags; upstream FreeRDP `3.x` tags are unrelated.
 
+## Unreleased
+
+### Improved
+
+- **The remote desktop uses the whole screen.** New connections start on “Auto fit”, where the desktop follows the window: open, resize or go full screen, and the picture is laid out for exactly that space instead of being shrunk to fit with empty bands above and below. Fixed resolutions keep working as before.
+
 ## 1.2.1 — 2026-10-18
 
 ### Added

@@ -71,6 +71,7 @@ int harmony_session_send_mouse_button(int sessionId, uint16_t x, uint16_t y, uin
 int harmony_session_send_mouse_wheel(int sessionId, uint16_t x, uint16_t y, int16_t delta);
 int harmony_session_send_key_scancode(int sessionId, uint32_t scancode, uint8_t down);
 int harmony_session_send_unicode_key(int sessionId, uint16_t codepoint, uint8_t down);
+int harmony_session_resize_desktop(int sessionId, uint32_t width, uint32_t height);
 int harmony_session_set_surface_id(int sessionId, const char* surfaceId);
 int harmony_session_submit_auth(int sessionId, const char* username, const char* password, const char* domain);
 int harmony_session_submit_cert(int sessionId, uint8_t accept);

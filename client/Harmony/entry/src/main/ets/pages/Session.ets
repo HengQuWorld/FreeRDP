@@ -6,6 +6,7 @@ import { SessionWindow } from '../components/SessionWindow';
 import { sessionManager, SessionRecord } from '../service/SessionManager';
 import { sessionWindowManager } from '../service/SessionWindowManager';
 import { SessionEvent, SessionStage, SessionSnapshot } from '../model/SessionModels';
+import { isAutoResolution } from '../model/ConnectionProfile';
 import { AuthDialog } from '../components/AuthDialog';
 import { CertDialog } from '../components/CertDialog';
 import { SessionLaunchParams, DEFAULT_SESSION_LAUNCH_PARAMS } from '../entryability/SessionAbility';
@@ -31,6 +32,7 @@ struct Session {
   @State sessionHost: string = '';
   @State sessionSubtitle: string = '';
   @State sessionStage: SessionStage = SessionStage.Idle;
+  @State sessionAutoResolution: boolean = false;
   @State sessionSnapshot: SessionSnapshot = {
     width: 0,
     height: 0,
@@ -173,6 +175,7 @@ struct Session {
     this.sessionSubtitle = record.state.message;
     this.sessionStage = record.state.stage;
     this.sessionSnapshot = record.snapshot;
+    this.sessionAutoResolution = isAutoResolution(record.profile);
 
     if (this.sessionStage !== this.previousStage) {
       if (this.sessionStage === SessionStage.Error) {
@@ -324,6 +327,7 @@ struct Session {
         stage: this.sessionStage,
         statusMessage: this.sessionSubtitle,
         snapshot: this.sessionSnapshot,
+        adaptiveDesktop: this.sessionAutoResolution,
         isDark: this.isDark,
         appLanguage: this.appLanguage,
         getFrameBuffer: (): ArrayBuffer => {
@@ -337,6 +341,9 @@ struct Session {
         },
         onMouseMove: async (x: number, y: number) => {
           await sessionManager.sendMouseMove(this.sessionId, x, y);
+        },
+        onRequestDesktopSize: async (width: number, height: number) => {
+          await sessionManager.resizeDesktop(this.sessionId, width, height);
         },
         onMouseButton: async (x: number, y: number, buttonFlags: number, down: boolean) => {
           await sessionManager.sendMouseButton(this.sessionId, x, y, buttonFlags, down);

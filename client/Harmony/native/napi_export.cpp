@@ -793,6 +793,22 @@ napi_value SetClipboardTextNapi(napi_env env, napi_callback_info info) {
   return CreateBoolean(env, Adapter().SetClipboardText(sessionId, text));
 }
 
+napi_value ResizeDesktopNapi(napi_env env, napi_callback_info info) {
+  std::int32_t sessionId = 0;
+  std::int32_t width = 0;
+  std::int32_t height = 0;
+  if (!GetThreeInt32Args(env, info, &sessionId, &width, &height)) {
+    return nullptr;
+  }
+  if ((width <= 0) || (height <= 0)) {
+    return CreateBoolean(env, false);
+  }
+
+  return CreateBoolean(env, harmony_session_resize_desktop(
+                                sessionId, static_cast<std::uint32_t>(width),
+                                static_cast<std::uint32_t>(height)) == 0);
+}
+
 napi_value SendMouseMoveNapi(napi_env env, napi_callback_info info) {
   std::int32_t sessionId = 0;
   std::int32_t x = 0;
@@ -947,6 +963,8 @@ static napi_value Init(napi_env env, napi_value exports) {
     { "setClipboardText", nullptr, SetClipboardTextNapi, nullptr, nullptr, nullptr,
       kDefaultPropertyAttributes, nullptr },
     { "sendMouseMove", nullptr, SendMouseMoveNapi, nullptr, nullptr, nullptr,
+      kDefaultPropertyAttributes, nullptr },
+    { "resizeDesktop", nullptr, ResizeDesktopNapi, nullptr, nullptr, nullptr,
       kDefaultPropertyAttributes, nullptr },
     { "sendMouseButton", nullptr, SendMouseButtonNapi, nullptr, nullptr, nullptr,
       kDefaultPropertyAttributes, nullptr },
@@ -1133,6 +1151,10 @@ int harmony_session_send_key_scancode(int sessionId, uint32_t scancode, uint8_t 
 
 int harmony_session_send_unicode_key(int sessionId, uint16_t codepoint, uint8_t down) {
   return Adapter().SendUnicodeKey(sessionId, codepoint, down != 0) ? 0 : -1;
+}
+
+int harmony_session_resize_desktop(int sessionId, uint32_t width, uint32_t height) {
+  return Adapter().ResizeDesktop(sessionId, width, height) ? 0 : -1;
 }
 
 int harmony_session_set_surface_id(int sessionId, const char* surfaceId) {

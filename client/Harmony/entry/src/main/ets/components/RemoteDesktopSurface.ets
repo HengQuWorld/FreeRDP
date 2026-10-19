@@ -40,6 +40,10 @@ export struct RemoteDesktopSurface {
   @Prop statusMessage: string = '';
   @Prop keyboardRequestToken: number = 0;
   @Prop isFullscreen: boolean = false;
+  // In auto-fit mode the remote desktop follows the viewport instead of being
+  // letterboxed into it: the size is pushed to the server whenever the
+  // available space changes.
+  @Prop adaptiveDesktop: boolean = false;
   @Prop @Watch('onThemeChanged') isDark: boolean = false;
   @State colors: ThemeColors = LightColors;
   @StorageLink('__app_language__') appLanguage: string = 'system';
@@ -56,6 +60,8 @@ export struct RemoteDesktopSurface {
     (_codepoint: number, _down: boolean): void => {};
   onScaleChange: (scale: number) => void = (_scale: number): void => {};
   onSurfaceSizeChange: (width: number, height: number) => void = (_width: number, _height: number): void => {};
+  onRequestDesktopSize: (width: number, height: number) => void =
+    (_width: number, _height: number): void => {};
   @Prop @Watch('onZoomInTriggered') zoomInToken: number = 0;
   @Prop @Watch('onZoomOutTriggered') zoomOutToken: number = 0;
   @Prop @Watch('onZoomResetTriggered') zoomResetToken: number = 0;
@@ -72,6 +78,11 @@ export struct RemoteDesktopSurface {
   @State panOffsetX: number = 0;
   @State panOffsetY: number = 0;
   private refreshTimer: number = -1;
+  private desktopResizeTimer: number = -1;
+  private desktopResizeRetryTimer: number = -1;
+  private desktopResizeRetries: number = 0;
+  private requestedDesktopWidth: number = 0;
+  private requestedDesktopHeight: number = 0;
   private renderedFrameSequence: number = 0;
   private handledKeyboardRequestToken: number = 0;
   private touchScrollStartY: number = 0;
@@ -308,8 +319,141 @@ export struct RemoteDesktopSurface {
   }
 
   onStageConnected(): void {
-    if (this.stage === SessionStage.Connected) {
-      this.requestInputFocus();
+    if (this.stage !== SessionStage.Connected) {
+      this.clearDesktopResizeTimers();
+      return;
+    }
+    this.requestInputFocus();
+    // A reconnect reuses this component but opens a fresh session at the
+    // profile's fixed size, so the viewport has to be requested again even
+    // when it is the size this component asked for on the previous one.
+    this.requestedDesktopWidth = 0;
+    this.requestedDesktopHeight = 0;
+    this.desktopResizeRetries = 0;
+    this.scheduleViewportDesktopResize();
+  }
+
+  private updateSurfaceSize(width: number, height: number): void {
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    if (width === this.surfaceWidth && height === this.surfaceHeight) {
+      return;
+    }
+    this.surfaceWidth = width;
+    this.surfaceHeight = height;
+    this.scheduleViewportDesktopResize();
+  }
+
+  /**
+   * Coalesces layout changes: dragging a window produces a stream of areas and
+   * every one of them would otherwise cost a server round trip.
+   */
+  private scheduleViewportDesktopResize(): void {
+    if (!this.adaptiveDesktop || this.stage !== SessionStage.Connected) {
+      return;
+    }
+    if (this.desktopResizeTimer >= 0) {
+      clearTimeout(this.desktopResizeTimer);
+    }
+    this.desktopResizeTimer = setTimeout(() => {
+      this.desktopResizeTimer = -1;
+      this.requestViewportDesktopSize();
+    }, 350);
+  }
+
+  private requestViewportDesktopSize(): void {
+    if (!this.adaptiveDesktop || this.stage !== SessionStage.Connected) {
+      return;
+    }
+    if (this.surfaceWidth <= 0 || this.surfaceHeight <= 0) {
+      return;
+    }
+
+    // The surface area is in vp; the remote desktop is in pixels. The width
+    // is rounded to an even value (the display control channel does that to
+    // every layout anyway) and both stay inside the range the protocol allows.
+    let width = Math.round(this.getUIContext().vp2px(this.surfaceWidth));
+    let height = Math.round(this.getUIContext().vp2px(this.surfaceHeight));
+    if (width < 200 || height < 200) {
+      return;
+    }
+    width = Math.min(8192, width);
+    height = Math.min(8192, height);
+    width -= width % 2;
+    height -= height % 2;
+
+    if (width === this.requestedDesktopWidth && height === this.requestedDesktopHeight) {
+      return;
+    }
+
+    this.desktopResizeRetries = 0;
+    this.sendDesktopResizeRequest(width, height);
+  }
+
+  private sendDesktopResizeRequest(width: number, height: number): void {
+    // Already matching (the server may round the size it accepts): asking
+    // again would only make it re-lay out the desktop for nothing.
+    if (this.snapshot.width > 0 && this.snapshot.height > 0 &&
+      Math.abs(this.snapshot.width - width) <= 2 && Math.abs(this.snapshot.height - height) <= 2) {
+      return;
+    }
+
+    this.requestedDesktopWidth = width;
+    this.requestedDesktopHeight = height;
+    console.info(`FreeRDP: viewport ${Math.round(this.surfaceWidth)}x${Math.round(this.surfaceHeight)} vp` +
+      ` -> desktop ${width}x${height} px (current ${this.snapshot.width}x${this.snapshot.height})`);
+    this.onRequestDesktopSize(width, height);
+    this.scheduleDesktopResizeRetry();
+  }
+
+  /**
+   * A monitor layout sent right after the channel comes up is not always
+   * applied: the server may still be finishing the session setup and drop it
+   * silently. Keep asking, at a pace that cannot flood the channel, until the
+   * desktop reports the requested size.
+   */
+  private scheduleDesktopResizeRetry(): void {
+    if (this.desktopResizeRetryTimer >= 0) {
+      clearTimeout(this.desktopResizeRetryTimer);
+    }
+    if (this.stage !== SessionStage.Connected) {
+      return;
+    }
+    this.desktopResizeRetryTimer = setTimeout(() => {
+      this.desktopResizeRetryTimer = -1;
+      if (!this.adaptiveDesktop || this.stage !== SessionStage.Connected) {
+        return;
+      }
+      const width = this.requestedDesktopWidth;
+      const height = this.requestedDesktopHeight;
+      if (width <= 0 || height <= 0) {
+        return;
+      }
+      if (this.snapshot.width > 0 && this.snapshot.height > 0 &&
+        Math.abs(this.snapshot.width - width) <= 2 &&
+        Math.abs(this.snapshot.height - height) <= 2) {
+        return;
+      }
+      if (this.desktopResizeRetries >= 6) {
+        // The server refused the layout; the view keeps fitting the desktop
+        // it does have, so stop asking until the viewport changes again.
+        return;
+      }
+      this.desktopResizeRetries += 1;
+      this.onRequestDesktopSize(width, height);
+      this.scheduleDesktopResizeRetry();
+    }, 1200);
+  }
+
+  private clearDesktopResizeTimers(): void {
+    if (this.desktopResizeTimer >= 0) {
+      clearTimeout(this.desktopResizeTimer);
+      this.desktopResizeTimer = -1;
+    }
+    if (this.desktopResizeRetryTimer >= 0) {
+      clearTimeout(this.desktopResizeRetryTimer);
+      this.desktopResizeRetryTimer = -1;
     }
   }
 
@@ -1129,6 +1273,7 @@ export struct RemoteDesktopSurface {
       clearInterval(this.refreshTimer);
       this.refreshTimer = -1;
     }
+    this.clearDesktopResizeTimers();
     this.releasePixelMap();
   }
 
@@ -1212,8 +1357,7 @@ export struct RemoteDesktopSurface {
             const newWidth = Number(newValue.width);
             const newHeight = Number(newValue.height);
             if (newWidth > 0 && newHeight > 0) {
-              this.surfaceWidth = newWidth;
-              this.surfaceHeight = newHeight;
+              this.updateSurfaceSize(newWidth, newHeight);
               this.onSurfaceSizeChange(newWidth, newHeight);
             }
           })
@@ -1331,8 +1475,7 @@ export struct RemoteDesktopSurface {
       return true;
     })
     .onAreaChange((_, newValue) => {
-      this.surfaceWidth = Number(newValue.width);
-      this.surfaceHeight = Number(newValue.height);
+      this.updateSurfaceSize(Number(newValue.width), Number(newValue.height));
     })
   }
 }

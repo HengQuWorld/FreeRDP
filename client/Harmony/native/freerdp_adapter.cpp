@@ -178,6 +178,16 @@ bool FreeRDPHarmonyAdapter::SendMouseWheel(int sessionId, std::uint16_t x, std::
   return session ? session->SendMouseWheel(x, y, delta) : false;
 }
 
+bool FreeRDPHarmonyAdapter::ResizeDesktop(int sessionId, std::uint32_t width,
+                                           std::uint32_t height) {
+  std::shared_ptr<FreeRDPHarmonySession> session;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    session = GetSessionLocked(sessionId);
+  }
+  return session ? session->ResizeDesktop(width, height) : false;
+}
+
 bool FreeRDPHarmonyAdapter::SendKeyScancode(int sessionId, std::uint32_t scancode, bool down) {
   std::shared_ptr<FreeRDPHarmonySession> session;
   {

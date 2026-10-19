@@ -1,4 +1,4 @@
-import { ConnectionProfile, DriveRedirection, deriveDriveName } from '../model/ConnectionProfile';
+import { ConnectionProfile, DriveRedirection, deriveDriveName, AUTO_DESKTOP_WIDTH, AUTO_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 import { showKeyboardForField } from '../utils/KeyboardHelper';
@@ -12,6 +12,7 @@ interface ResolutionPreset {
 }
 
 const RESOLUTION_PRESETS: ResolutionPreset[] = [
+  { label: 'resolution_auto', width: AUTO_DESKTOP_WIDTH, height: AUTO_DESKTOP_HEIGHT },
   { label: 'resolution_1920x1080', width: 1920, height: 1080 },
   { label: 'resolution_2560x1440', width: 2560, height: 1440 },
   { label: 'resolution_3840x2160', width: 3840, height: 2160 },
@@ -308,6 +309,9 @@ export struct ConnectionForm {
   private getCurrentResolutionLabel(): string {
     const w: number = this.profile.desktopWidth;
     const h: number = this.profile.desktopHeight;
+    if (w <= 0 || h <= 0) {
+      return i18n.get(this.appLanguage, 'resolution_auto');
+    }
     for (const preset of RESOLUTION_PRESETS) {
       if (preset.width === w && preset.height === h) {
         return i18n.get(this.appLanguage, preset.label);

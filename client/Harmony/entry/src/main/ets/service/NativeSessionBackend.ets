@@ -12,6 +12,7 @@ import {
   submitCert as nativeSubmitCert,
   setClipboardText as nativeSetClipboardText,
   sendMouseMove as nativeSendMouseMove,
+  resizeDesktop as nativeResizeDesktop,
   sendMouseButton as nativeSendMouseButton,
   sendMouseWheel as nativeSendMouseWheel,
   sendKeyScancode as nativeSendKeyScancode,
@@ -50,6 +51,7 @@ export interface SessionBackend {
   submitCert(sessionId: number, accept: boolean): Promise<void>;
   setClipboardText(sessionId: number, text: string): Promise<void>;
   sendMouseMove(sessionId: number, x: number, y: number): Promise<void>;
+  resizeDesktop(sessionId: number, width: number, height: number): Promise<void>;
   sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number, down: boolean): Promise<void>;
   sendMouseWheel(sessionId: number, x: number, y: number, delta: number): Promise<void>;
   sendKeyScancode(sessionId: number, scancode: number, down: boolean): Promise<void>;
@@ -80,6 +82,9 @@ class NativeSessionBackendImpl implements SessionBackend {
   }
 
   private buildNativeConfig(profile: ConnectionProfile): NativeSessionConfig {
+    // An auto-fit profile stores 0x0 (follow the view). The session still has
+    // to open at a concrete size before any view exists, so it starts at 1080p
+    // and the first viewport report resizes it from there.
     const width: number = profile.desktopWidth > 0 ? profile.desktopWidth : DEFAULT_DESKTOP_WIDTH;
     const height: number = profile.desktopHeight > 0 ? profile.desktopHeight : DEFAULT_DESKTOP_HEIGHT;
     const drives: NativeDriveRedirection[] = normalizeDriveRedirections(profile.driveRedirections)
@@ -364,6 +369,18 @@ class NativeSessionBackendImpl implements SessionBackend {
   async sendMouseMove(sessionId: number, x: number, y: number): Promise<void> {
     this.requireRecord(sessionId);
     this.requireNativeOk(nativeSendMouseMove(sessionId, x, y), 'sendMouseMove');
+  }
+
+  async resizeDesktop(sessionId: number, width: number, height: number): Promise<void> {
+    // Best effort: the view asks on a timer and may outlive the session by a
+    // few milliseconds. There is nothing to do for a session that is gone, and
+    // a refused request only means the server cannot resize right now (no
+    // display control channel, or the session is winding down): the viewport
+    // keeps working with the letterboxed fit.
+    if (this.findSession(sessionId) === null) {
+      return;
+    }
+    nativeResizeDesktop(sessionId, width, height);
   }
 
   async sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number,

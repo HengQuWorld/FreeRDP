@@ -89,6 +89,16 @@ export interface ConnectionProfile {
 export const DEFAULT_DESKTOP_WIDTH: number = 1920;
 export const DEFAULT_DESKTOP_HEIGHT: number = 1080;
 
+// A zero size means "follow the session viewport". The client then asks the
+// remote side to lay the desktop out at the surface size, so the image fills
+// the device screen instead of being letterboxed above and below.
+export const AUTO_DESKTOP_WIDTH: number = 0;
+export const AUTO_DESKTOP_HEIGHT: number = 0;
+
+export function isAutoResolution(profile: ConnectionProfile): boolean {
+  return profile.desktopWidth <= 0 || profile.desktopHeight <= 0;
+}
+
 export function createEmptyProfile(id: string): ConnectionProfile {
   return {
     id: id,
@@ -110,8 +120,8 @@ export function createEmptyProfile(id: string): ConnectionProfile {
     enableAudio: false,
     enableDrive: false,
     enableGfx: true,
-    desktopWidth: DEFAULT_DESKTOP_WIDTH,
-    desktopHeight: DEFAULT_DESKTOP_HEIGHT,
+    desktopWidth: AUTO_DESKTOP_WIDTH,
+    desktopHeight: AUTO_DESKTOP_HEIGHT,
     driveRedirections: []
   };
 }

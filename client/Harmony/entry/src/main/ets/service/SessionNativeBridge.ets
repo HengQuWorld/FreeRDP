@@ -15,6 +15,7 @@ export interface SessionBridge {
   submitCert(sessionId: number, accept: boolean): Promise<void>;
   setClipboardText(sessionId: number, text: string): Promise<void>;
   sendMouseMove(sessionId: number, x: number, y: number): Promise<void>;
+  resizeDesktop(sessionId: number, width: number, height: number): Promise<void>;
   sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number, down: boolean): Promise<void>;
   sendMouseWheel(sessionId: number, x: number, y: number, delta: number): Promise<void>;
   sendKeyScancode(sessionId: number, scancode: number, down: boolean): Promise<void>;
@@ -72,6 +73,10 @@ class DefaultSessionBridge implements SessionBridge {
 
   async sendMouseMove(sessionId: number, x: number, y: number): Promise<void> {
     return sessionBackend.sendMouseMove(sessionId, x, y);
+  }
+
+  async resizeDesktop(sessionId: number, width: number, height: number): Promise<void> {
+    return sessionBackend.resizeDesktop(sessionId, width, height);
   }
 
   async sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number, down: boolean): Promise<void> {

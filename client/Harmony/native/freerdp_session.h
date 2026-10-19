@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "desktop_resize.h"
 #include "freerdp_adapter.h"
 
 struct NativeWindow;
@@ -54,6 +55,10 @@ class FreeRDPHarmonySession {
   bool SendMouseMove(std::uint16_t x, std::uint16_t y);
   bool SendMouseButton(std::uint16_t x, std::uint16_t y, std::uint16_t buttonFlags, bool down);
   bool SendMouseWheel(std::uint16_t x, std::uint16_t y, std::int16_t delta);
+  // Asks the server to lay the remote desktop out at this size. The request is
+  // sent once the display control channel has announced its capabilities; on
+  // servers without it the call is a no-op and the existing desktop stays.
+  bool ResizeDesktop(std::uint32_t width, std::uint32_t height);
   bool SendKeyScancode(std::uint32_t scancode, bool down);
   bool SendUnicodeKey(std::uint16_t codepoint, bool down);
   void SubmitAuth(const std::string& username, const std::string& password, const std::string& domain);
@@ -70,6 +75,11 @@ class FreeRDPHarmonySession {
                    const std::string& message);
   void SetCliprdrContext(void* cliprdr);
   void MarkClipboardReady(bool ready);
+  // Display control channel (dynamic resolution) plumbing. The context is
+  // published by the channel when it connects; caps arrive once the server
+  // answered, and only then may a monitor layout be sent.
+  void SetDispContext(void* disp);
+  void MarkDisplayControlReady(std::uint32_t maxNumMonitors);
   std::string GetLocalClipboardText() const;
   bool SendClipboardFormatList();
   bool SendClipboardDataRequest(std::uint32_t formatId);
@@ -81,6 +91,7 @@ class FreeRDPHarmonySession {
       kMouse,
       kScancodeKey,
       kUnicodeKey,
+      kDesktopResize,
     };
 
     Type type;
@@ -106,6 +117,10 @@ class FreeRDPHarmonySession {
   std::vector<std::string> BuildCommandLineArgs() const;
   bool QueueInputEvent(const InputEvent& event);
   bool ProcessInputEvents(void* input);
+  // Sends the last requested desktop size through the display control channel.
+  // Requires the disp context and its caps; the request stays pending until
+  // both are there. Runs on the session thread.
+  void SendPendingDesktopResize();
 
   // Pins the native buffer geometry to the RDP desktop size. Requires mutex_ to
   // be held. Returns true when the window is bound to the requested size.
@@ -142,6 +157,14 @@ class FreeRDPHarmonySession {
   void* inputEventHandle_;
   std::deque<InputEvent> pendingInputEvents_;
   void* cliprdr_;
+  void* disp_;
+  bool displayControlReady_;
+  freerdp_harmony::DesktopResizeQueue desktopResize_;
+  // Desktop size the UI was last told about. UpdateSnapshot may already have
+  // moved the snapshot forward (a server resize does that before the next
+  // frame), so the size the UI still shows has to be tracked on its own or it
+  // would never learn about the new geometry.
+  freerdp_harmony::DesktopSize publishedDesktop_;
   bool clipboardReady_;
   std::string localClipboardText_;
   bool started_;

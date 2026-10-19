@@ -12,12 +12,15 @@ export struct SessionWindow {
   @Prop @Watch('onStageChanged') stage: SessionStage;
   @Prop statusMessage: string;
   @Prop snapshot: SessionSnapshot;
+  @Prop adaptiveDesktop: boolean = false;
   @Prop @Watch('onThemeChanged') isDark: boolean = false;
   @Prop appLanguage: string = 'system';
   @State colors: ThemeColors = LightColors;
   getFrameBuffer: () => ArrayBuffer = (): ArrayBuffer => new ArrayBuffer(0);
   setSurfaceId: (surfaceId: string) => Promise<void> = async (_surfaceId: string): Promise<void> => {};
   onMouseMove: (x: number, y: number) => void = (_x: number, _y: number): void => {};
+  onRequestDesktopSize: (width: number, height: number) => void =
+    (_width: number, _height: number): void => {};
   onMouseButton: (x: number, y: number, buttonFlags: number, down: boolean) => void =
     (_x: number, _y: number, _buttonFlags: number, _down: boolean): void => {};
   onMouseWheel: (x: number, y: number, delta: number) => void =
@@ -133,10 +136,12 @@ export struct SessionWindow {
         statusMessage: this.statusMessage,
         keyboardRequestToken: this.keyboardRequestToken,
         isFullscreen: this.isFullscreen,
+        adaptiveDesktop: this.adaptiveDesktop,
         isDark: this.isDark,
         getFrameBuffer: this.getFrameBuffer,
         setSurfaceId: this.setSurfaceId,
         onMouseMove: this.onMouseMove,
+        onRequestDesktopSize: this.onRequestDesktopSize,
         onMouseButton: (x, y, btn, down) => {
           this.extendChromeInteractionIfVisible();
           this.onMouseButton(x, y, btn, down);

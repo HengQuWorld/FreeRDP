@@ -23,7 +23,9 @@
 #include <freerdp/client/channels.h>
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/client/cmdline.h>
+#include <freerdp/client/disp.h>
 #include <freerdp/channels/cliprdr.h>
+#include <freerdp/channels/disp.h>
 #include <freerdp/constants.h>
 #include <freerdp/freerdp.h>
 #include <freerdp/gdi/gdi.h>
@@ -248,6 +250,11 @@ static BOOL HarmonyDesktopResize(rdpContext* context) {
   const std::uint32_t height =
       freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
 
+  // The server accepted a monitor layout and re-laid the session out; say so
+  // once, because a desktop that keeps its old size looks identical on screen.
+  HiLogInfo("desktop resize from server: " + std::to_string(width) + "x" +
+            std::to_string(height));
+
   if ((context->gdi != nullptr) && !gdi_resize(context->gdi, width, height)) {
     return FALSE;
   }
@@ -429,6 +436,21 @@ static void HarmonyCliprdrUninit(FreeRDPHarmonySession* session, CliprdrClientCo
   session->MarkClipboardReady(false);
 }
 
+static UINT HarmonyDisplayControlCaps(DispClientContext* disp, UINT32 maxNumMonitors,
+                                      UINT32 maxMonitorAreaFactorA,
+                                      UINT32 maxMonitorAreaFactorB) {
+  WINPR_UNUSED(maxMonitorAreaFactorA);
+  WINPR_UNUSED(maxMonitorAreaFactorB);
+  if ((disp == nullptr) || (disp->custom == nullptr)) {
+    return ERROR_INVALID_PARAMETER;
+  }
+
+  FreeRDPHarmonySession* session =
+      reinterpret_cast<FreeRDPHarmonySession*>(disp->custom);
+  session->MarkDisplayControlReady(maxNumMonitors);
+  return CHANNEL_RC_OK;
+}
+
 static void HarmonyOnChannelConnectedEventHandler(void* context,
                                                   const ChannelConnectedEventArgs* eventArgs) {
   if ((context == nullptr) || (eventArgs == nullptr)) {
@@ -439,6 +461,18 @@ static void HarmonyOnChannelConnectedEventHandler(void* context,
   FreeRDPHarmonySession* session = SessionFromContext(rdpContextPointer);
   if ((session != nullptr) && (std::strcmp(eventArgs->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)) {
     HarmonyCliprdrInit(session, reinterpret_cast<CliprdrClientContext*>(eventArgs->pInterface));
+    return;
+  }
+
+  if ((session != nullptr) && (std::strcmp(eventArgs->name, DISP_DVC_CHANNEL_NAME) == 0)) {
+    DispClientContext* disp = reinterpret_cast<DispClientContext*>(eventArgs->pInterface);
+    if (disp != nullptr) {
+      disp->custom = session;
+      // Without this callback the server's caps are dropped and the client
+      // never learns that a monitor layout may be sent.
+      disp->DisplayControlCaps = HarmonyDisplayControlCaps;
+      session->SetDispContext(disp);
+    }
     return;
   }
 
@@ -455,6 +489,11 @@ static void HarmonyOnChannelDisconnectedEventHandler(
   FreeRDPHarmonySession* session = SessionFromContext(rdpContextPointer);
   if ((session != nullptr) && (std::strcmp(eventArgs->name, CLIPRDR_SVC_CHANNEL_NAME) == 0)) {
     HarmonyCliprdrUninit(session, reinterpret_cast<CliprdrClientContext*>(eventArgs->pInterface));
+    return;
+  }
+
+  if ((session != nullptr) && (std::strcmp(eventArgs->name, DISP_DVC_CHANNEL_NAME) == 0)) {
+    session->SetDispContext(nullptr);
     return;
   }
 
@@ -488,6 +527,19 @@ static BOOL HarmonyPreConnect(freerdp* instance) {
                                        HarmonyOnChannelConnectedEventHandler);
     return FALSE;
   }
+
+  // Say once what the display control settings resolved to. The channel
+  // itself is registered later in this same call (freerdp_connect loads the
+  // addins right after PreConnect), so whether it actually negotiated is
+  // reported by its capabilities callback instead.
+  HiLogInfo(std::string("preconnect: display control settings support=") +
+            (freerdp_settings_get_bool(settings, FreeRDP_SupportDisplayControl) ? "true"
+                                                                              : "false") +
+            " dynamic=" +
+            (freerdp_settings_get_bool(settings, FreeRDP_DynamicResolutionUpdate) ? "true"
+                                                                                  : "false") +
+            " smartSizing=" +
+            (freerdp_settings_get_bool(settings, FreeRDP_SmartSizing) ? "true" : "false"));
 
   return TRUE;
 }
@@ -825,6 +877,8 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       hasPendingFrameEvent_(false),
       inputEventHandle_(CreateEventA(nullptr, TRUE, FALSE, nullptr)),
       cliprdr_(nullptr),
+      disp_(nullptr),
+      displayControlReady_(false),
       clipboardReady_(false),
       started_(false),
       stopRequested_(false),
@@ -1591,8 +1645,11 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
 
   std::lock_guard<std::mutex> lock(mutex_);
   // The UI sizes the surface from the desktop dimensions, so a resize still has
-  // to reach it even when frames themselves are presented natively.
-  const bool desktopSizeChanged = (snapshot_.width != width) || (snapshot_.height != height);
+  // to reach it even when frames themselves are presented natively. Compare
+  // against what the UI was told last: UpdateSnapshot may already have moved
+  // snapshot_ to the new size for this very frame.
+  const bool desktopSizeChanged =
+      freerdp_harmony::ShouldPublishDesktopSize(publishedDesktop_, { width, height });
   snapshot_.width = width;
   snapshot_.height = height;
   snapshot_.dirtyLeft = left;
@@ -1628,6 +1685,8 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
   // change itself is published by the surface-id call instead.
   if ((nativeWindow_ == nullptr || desktopSizeChanged) && !hasPendingFrameEvent_) {
     hasPendingFrameEvent_ = true;
+    publishedDesktop_.width = width;
+    publishedDesktop_.height = height;
     pendingSessionEvents_.push_back(HarmonySessionEvent{
         HarmonySessionEventType::kFrameUpdated, info_.stage, info_.lastError, info_.connected,
         frameSequence_, "", "" });
@@ -1726,6 +1785,11 @@ bool FreeRDPHarmonySession::ProcessInputEvents(void* inputPointer) {
       case InputEvent::Type::kUnicodeKey:
         success = freerdp_input_send_unicode_keyboard_event(input, event.flags, event.codepoint);
         break;
+      case InputEvent::Type::kDesktopResize:
+        // The size lives in the resize queue: several layout changes may
+        // collapse into one request before the loop gets here.
+        success = TRUE;
+        break;
     }
 
     if (!success) {
@@ -1733,7 +1797,104 @@ bool FreeRDPHarmonySession::ProcessInputEvents(void* inputPointer) {
     }
   }
 
+  SendPendingDesktopResize();
   return true;
+}
+
+bool FreeRDPHarmonySession::ResizeDesktop(std::uint32_t width, std::uint32_t height) {
+  if ((width < DISPLAY_CONTROL_MIN_MONITOR_WIDTH) ||
+      (width > DISPLAY_CONTROL_MAX_MONITOR_WIDTH) ||
+      (height < DISPLAY_CONTROL_MIN_MONITOR_HEIGHT) ||
+      (height > DISPLAY_CONTROL_MAX_MONITOR_HEIGHT)) {
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    desktopResize_.Request(width, height);
+  }
+
+  return QueueInputEvent({ InputEvent::Type::kDesktopResize, 0U, 0U, 0U, 0U, 0U });
+}
+
+void FreeRDPHarmonySession::SetDispContext(void* disp) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  disp_ = disp;
+  displayControlReady_ = false;
+}
+
+void FreeRDPHarmonySession::MarkDisplayControlReady(std::uint32_t maxNumMonitors) {
+  HANDLE inputEventHandle = nullptr;
+  bool ready = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    displayControlReady_ = (disp_ != nullptr);
+    ready = displayControlReady_;
+    inputEventHandle = static_cast<HANDLE>(inputEventHandle_);
+  }
+
+  HiLogInfo("display control caps: maxMonitors=" + std::to_string(maxNumMonitors) +
+            " ready=" + (ready ? std::string("true") : std::string("false")));
+
+  // A layout requested before the caps arrived is still pending; wake the
+  // session loop so it can be sent now that it is allowed to.
+  if (inputEventHandle != nullptr) {
+    SetEvent(inputEventHandle);
+  }
+}
+
+void FreeRDPHarmonySession::SendPendingDesktopResize() {
+  freerdp_harmony::DesktopSize target;
+  std::uint32_t orientation = 0;
+  std::uint32_t desktopScaleFactor = 100;
+  std::uint32_t deviceScaleFactor = 100;
+  DispClientContext* disp = nullptr;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    rdpContext* context = static_cast<rdpContext*>(context_);
+    if ((context == nullptr) || (context->settings == nullptr)) {
+      return;
+    }
+
+    const freerdp_harmony::DesktopSize current{ snapshot_.width, snapshot_.height };
+    const bool channelReady = displayControlReady_ && (disp_ != nullptr);
+    if (!desktopResize_.TakeReady(channelReady, current, &target)) {
+      return;
+    }
+
+    disp = static_cast<DispClientContext*>(disp_);
+    orientation = freerdp_settings_get_uint16(context->settings, FreeRDP_DesktopOrientation);
+    desktopScaleFactor =
+        freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopScaleFactor);
+    deviceScaleFactor = freerdp_settings_get_uint32(context->settings, FreeRDP_DeviceScaleFactor);
+  }
+
+  if ((disp == nullptr) || (disp->SendMonitorLayout == nullptr)) {
+    return;
+  }
+
+  DISPLAY_CONTROL_MONITOR_LAYOUT monitor = {};
+  monitor.Flags = DISPLAY_CONTROL_MONITOR_PRIMARY;
+  monitor.Left = 0;
+  monitor.Top = 0;
+  monitor.Width = target.width;
+  monitor.Height = target.height;
+  monitor.PhysicalWidth = target.width;
+  monitor.PhysicalHeight = target.height;
+  monitor.Orientation = orientation;
+  monitor.DesktopScaleFactor = desktopScaleFactor;
+  monitor.DeviceScaleFactor = deviceScaleFactor;
+
+  const UINT rc = disp->SendMonitorLayout(disp, 1, &monitor);
+  if (rc != CHANNEL_RC_OK) {
+    HiLogError("display control: layout " + std::to_string(target.width) + "x" +
+               std::to_string(target.height) + " rejected rc=" + std::to_string(rc));
+    return;
+  }
+
+  HiLogInfo("display control: requested desktop " + std::to_string(target.width) + "x" +
+            std::to_string(target.height));
 }
 
 bool FreeRDPHarmonySession::EnsureContext() {
@@ -1862,8 +2023,20 @@ bool FreeRDPHarmonySession::ApplySettings(void* settingsPointer, std::string& ou
     outError = "set FreeRDP_DesktopResize failed";
     return false;
   }
-  if (!freerdp_settings_set_bool(settings, FreeRDP_SmartSizing, TRUE)) {
+  // The remote desktop follows the surface instead of being scaled into it:
+  // the display control channel carries the monitor layout, and the server
+  // re-lays the session out at that size. Smart sizing is FreeRDP's other,
+  // mutually exclusive answer (scale the received frame), so it stays off.
+  if (!freerdp_settings_set_bool(settings, FreeRDP_SmartSizing, FALSE)) {
     outError = "set FreeRDP_SmartSizing failed";
+    return false;
+  }
+  if (!freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE)) {
+    outError = "set FreeRDP_SupportDisplayControl failed";
+    return false;
+  }
+  if (!freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE)) {
+    outError = "set FreeRDP_DynamicResolutionUpdate failed";
     return false;
   }
   if (!freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, config_.enableGfx ? FALSE : TRUE)) {
@@ -1937,7 +2110,6 @@ std::vector<std::string> FreeRDPHarmonySession::BuildCommandLineArgs() const {
   args.emplace_back("/size:" + std::to_string(desktopWidth) + "x" +
                     std::to_string(desktopHeight));
   args.emplace_back("/bpp:32");
-  args.emplace_back("/smart-sizing");
   
   // 性能相关参数 - 根据尝试次数和模式调整
   if (config_.enableGfx && !useHighPerformanceMode_) {

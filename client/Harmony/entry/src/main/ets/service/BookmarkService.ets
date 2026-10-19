@@ -228,8 +228,12 @@ export class BookmarkService {
       : this.decode(parts[passwordIndex]).length > 0;
     const password: string = rememberPassword ? this.decode(parts[passwordIndex]) : '';
     const hasResolution: boolean = parts.length === 21 || parts.length === 22;
-    const desktopWidth: number = hasResolution ? Number(parts[19]) : DEFAULT_DESKTOP_WIDTH;
-    const desktopHeight: number = hasResolution ? Number(parts[20]) : DEFAULT_DESKTOP_HEIGHT;
+    // A stored 0 means auto fit, so only a missing or unparsable field falls
+    // back to the default size.
+    const desktopWidth: number = hasResolution && parts[19].trim().length > 0
+      ? Number(parts[19]) : DEFAULT_DESKTOP_WIDTH;
+    const desktopHeight: number = hasResolution && parts[20].trim().length > 0
+      ? Number(parts[20]) : DEFAULT_DESKTOP_HEIGHT;
     const hasDriveRedirections: boolean = parts.length === 22;
     const driveRedirections: DriveRedirection[] = hasDriveRedirections
       ? this.deserializeDriveRedirections(parts[21])
@@ -256,8 +260,10 @@ export class BookmarkService {
       enableAudio: parts[audioIndex] === '1',
       enableDrive: parts[driveIndex] === '1',
       enableGfx: parts.length === 19 || parts.length === 21 || parts.length === 22 ? parts[18] === '1' : false,
-      desktopWidth: Number.isFinite(desktopWidth) && desktopWidth > 0 ? desktopWidth : DEFAULT_DESKTOP_WIDTH,
-      desktopHeight: Number.isFinite(desktopHeight) && desktopHeight > 0 ? desktopHeight : DEFAULT_DESKTOP_HEIGHT,
+      desktopWidth: Number.isFinite(desktopWidth) && desktopWidth >= 0
+        ? desktopWidth : DEFAULT_DESKTOP_WIDTH,
+      desktopHeight: Number.isFinite(desktopHeight) && desktopHeight >= 0
+        ? desktopHeight : DEFAULT_DESKTOP_HEIGHT,
       driveRedirections: driveRedirections
     };
   }

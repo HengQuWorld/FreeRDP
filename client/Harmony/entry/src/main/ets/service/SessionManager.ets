@@ -292,6 +292,13 @@ class SessionManagerImpl {
     await sessionBridge.sendMouseMove(sessionId, x, y);
   }
 
+  async resizeDesktop(sessionId: number, width: number, height: number): Promise<void> {
+    if (sessionId <= 0) {
+      return;
+    }
+    await sessionBridge.resizeDesktop(sessionId, width, height);
+  }
+
   async sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number, down: boolean): Promise<void> {
     await sessionBridge.sendMouseButton(sessionId, x, y, buttonFlags, down);
   }
