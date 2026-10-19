@@ -305,7 +305,8 @@ class NativeSessionBackendImpl implements SessionBackend {
       dirtyLeft: snapshot.dirtyLeft,
       dirtyTop: snapshot.dirtyTop,
       dirtyWidth: snapshot.dirtyWidth,
-      dirtyHeight: snapshot.dirtyHeight
+      dirtyHeight: snapshot.dirtyHeight,
+      nativeWindowBound: snapshot.nativeWindowBound === true
     };
   }
 

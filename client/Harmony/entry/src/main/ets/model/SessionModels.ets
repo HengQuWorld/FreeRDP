@@ -28,6 +28,7 @@ export interface SessionSnapshot {
   dirtyTop: number;
   dirtyWidth: number;
   dirtyHeight: number;
+  nativeWindowBound: boolean;
 }
 
 export enum SessionEventType {

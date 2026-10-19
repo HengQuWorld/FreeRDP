@@ -834,6 +834,7 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       nativeGeometryWidth_(0),
       nativeGeometryHeight_(0),
       warnedNativeWindowFailure_(false),
+      warnedGeometryFailure_(false),
       frameBufferStale_(false),
       dialogAnswered_(false),
       certAccepted_(false),
@@ -1031,7 +1032,9 @@ bool FreeRDPHarmonySession::IsTeardownComplete() const {
 
 HarmonySurfaceSnapshot FreeRDPHarmonySession::GetSnapshot() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return snapshot_;
+  HarmonySurfaceSnapshot snapshot = snapshot_;
+  snapshot.nativeWindowBound = nativeWindow_ != nullptr;
+  return snapshot;
 }
 
 HarmonySessionInfo FreeRDPHarmonySession::GetInfo() const {
@@ -1372,6 +1375,7 @@ void FreeRDPHarmonySession::SetSurfaceId(const std::string& surfaceIdStr) {
   nativeGeometryWidth_ = 0;
   nativeGeometryHeight_ = 0;
   warnedNativeWindowFailure_ = false;
+  warnedGeometryFailure_ = false;
   if (surfaceIdStr.empty()) {
     // The shared buffer stops being updated while a native window is bound, so
     // it may hold a frame from before the binding. Drop it instead of letting
@@ -1425,11 +1429,15 @@ bool FreeRDPHarmonySession::EnsureNativeWindowGeometryLocked(std::uint32_t width
       nativeWindow_, SET_BUFFER_GEOMETRY, static_cast<int32_t>(width),
       static_cast<int32_t>(height));
   if (ret != 0) {
-    HiLogError("NativeWindow SET_BUFFER_GEOMETRY failed ret=" + std::to_string(ret) + " size=" +
-               std::to_string(width) + "x" + std::to_string(height));
+    if (!warnedGeometryFailure_) {
+      warnedGeometryFailure_ = true;
+      HiLogError("NativeWindow SET_BUFFER_GEOMETRY failed ret=" + std::to_string(ret) +
+                 " size=" + std::to_string(width) + "x" + std::to_string(height));
+    }
     return false;
   }
 
+  warnedGeometryFailure_ = false;
   nativeGeometryWidth_ = width;
   nativeGeometryHeight_ = height;
   HiLogInfo("NativeWindow geometry set to " + std::to_string(width) + "x" +
@@ -1582,6 +1590,9 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
+  // The UI sizes the surface from the desktop dimensions, so a resize still has
+  // to reach it even when frames themselves are presented natively.
+  const bool desktopSizeChanged = (snapshot_.width != width) || (snapshot_.height != height);
   snapshot_.width = width;
   snapshot_.height = height;
   snapshot_.dirtyLeft = left;
@@ -1610,7 +1621,12 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
     }
   }
 
-  if (!hasPendingFrameEvent_) {
+  // Only the shared-buffer path needs the UI to wake up for a frame. Once the
+  // surface owns the pixels, publishing a frame event every 120 ms would make
+  // the session page rebuild that often for nothing. A desktop resize is the
+  // exception: the UI lays the surface out from those dimensions. The binding
+  // change itself is published by the surface-id call instead.
+  if ((nativeWindow_ == nullptr || desktopSizeChanged) && !hasPendingFrameEvent_) {
     hasPendingFrameEvent_ = true;
     pendingSessionEvents_.push_back(HarmonySessionEvent{
         HarmonySessionEventType::kFrameUpdated, info_.stage, info_.lastError, info_.connected,

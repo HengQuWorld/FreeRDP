@@ -39,7 +39,8 @@ struct Session {
     dirtyLeft: 0,
     dirtyTop: 0,
     dirtyWidth: 0,
-    dirtyHeight: 0
+    dirtyHeight: 0,
+    nativeWindowBound: false
   };
   @State authEvent: SessionEvent | null = null;
   @State certEvent: SessionEvent | null = null;

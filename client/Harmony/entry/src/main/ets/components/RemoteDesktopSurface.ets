@@ -6,6 +6,11 @@ import { KeyboardMapper } from '../utils/KeyboardMapper';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 
+// Set to false to keep every frame going through the shared buffer and the
+// pixel map. The native surface path is the default; this is the one-line
+// fallback if a device ever misbehaves with it.
+const NATIVE_SURFACE_ENABLED: boolean = true;
+
 const PTR_FLAGS_BUTTON1: number = 0x1000;
 const PTR_FLAGS_BUTTON2: number = 0x2000;
 const PTR_FLAGS_BUTTON3: number = 0x4000;
@@ -101,6 +106,10 @@ export struct RemoteDesktopSurface {
   private lastSyntheticKeyTapTs: number = 0;
 
   private surfaceController: XComponentController = new XComponentController();
+  // The surface id last handed to the native side. Kept so a surface that is
+  // recreated (rotation, window resize) is rebound instead of being left with
+  // a handle to the destroyed one.
+  private boundSurfaceId: string = '';
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
@@ -980,6 +989,16 @@ export struct RemoteDesktopSurface {
     if (this.stage !== SessionStage.Connected) {
       return;
     }
+
+    // Once the native side presents frames into the bound surface, the shared
+    // frame buffer stops being filled. Pulling it here would allocate a pixel
+    // map from a frozen frame and keep 8 MB alive for nothing.
+    if (this.snapshot.nativeWindowBound) {
+      this.releasePixelMap();
+      this.renderedFrameSequence = this.snapshot.frameSequence;
+      return;
+    }
+
     if (this.snapshot.frameSequence <= this.renderedFrameSequence ||
       this.snapshot.width <= 0 ||
       this.snapshot.height <= 0) {
@@ -1012,9 +1031,47 @@ export struct RemoteDesktopSurface {
     }
   }
 
+  private isNativeSurfaceActive(): boolean {
+    return this.stage === SessionStage.Connected && this.snapshot.nativeWindowBound;
+  }
+
+  private bindNativeSurface(): void {
+    if (!NATIVE_SURFACE_ENABLED) {
+      return;
+    }
+    let surfaceId: string = '';
+    try {
+      surfaceId = this.surfaceController.getXComponentSurfaceId();
+    } catch (error) {
+      console.warn(`FreeRDP: could not read surface id: ${error}`);
+      return;
+    }
+    if (surfaceId.length === 0) {
+      console.warn('FreeRDP: surface created without an id, keeping the pixel map path');
+      return;
+    }
+    if (surfaceId === this.boundSurfaceId) {
+      return;
+    }
+    this.boundSurfaceId = surfaceId;
+    this.setSurfaceId(surfaceId).catch((error: Error) => {
+      this.boundSurfaceId = '';
+      console.warn(`FreeRDP: setSurfaceId failed: ${error}`);
+    });
+  }
+
+  private unbindNativeSurface(): void {
+    if (this.boundSurfaceId.length === 0) {
+      return;
+    }
+    this.boundSurfaceId = '';
+    this.setSurfaceId('').catch((error: Error) => {
+      console.warn(`FreeRDP: releasing surface failed: ${error}`);
+    });
+  }
+
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
-    this.setSurfaceId('');
 
     this.onInsertText = (text: string): void => {
       if (this.stage !== SessionStage.Connected || text.length === 0) {
@@ -1058,7 +1115,7 @@ export struct RemoteDesktopSurface {
   aboutToDisappear(): void {
     this.imfAttached = false;
     this.softInputFocused = false;
-    this.setSurfaceId('');
+    this.unbindNativeSurface();
     if (this.onInsertText !== null) {
       try { inputMethod.getController().off('insertText', this.onInsertText); } catch (_) {}
     }
@@ -1077,7 +1134,40 @@ export struct RemoteDesktopSurface {
 
   build() {
     Stack() {
-      if (this.framePixelMap !== null) {
+      // The surface sits underneath every other layer. Frames are written into
+      // it directly by the native side once the connection is up, which skips
+      // the whole-frame copy into a pixel map on the UI thread. It stays
+      // mounted for the session's lifetime so a failed binding can fall back to
+      // the pixel map path without recreating the surface.
+      if (this.stage === SessionStage.Connected) {
+        XComponent({
+          id: 'rdp_surface_' + this.sessionId,
+          type: XComponentType.SURFACE,
+          controller: this.surfaceController
+        })
+          .width(this.getBaseFitMetrics().width)
+          .height(this.getBaseFitMetrics().height)
+          .position({
+            x: this.getBaseFitMetrics().offsetX,
+            y: this.getBaseFitMetrics().offsetY
+          })
+          // Scale and translate instead of resizing: a size change would make
+          // the surface reallocate its buffers and fight the geometry the
+          // native side pins to the RDP desktop size.
+          .scale({ x: this.zoomScale, y: this.zoomScale })
+          .translate({ x: this.panOffsetX, y: this.panOffsetY })
+          .onLoad(() => {
+            this.bindNativeSurface();
+          })
+          .onDestroy(() => {
+            this.unbindNativeSurface();
+          })
+      }
+
+      // The pixel map stays on top but is only mounted while the native side
+      // has not taken over, so the two render paths never draw at once. The
+      // native side keeps filling the shared buffer in exactly that case.
+      if (!this.isNativeSurfaceActive() && this.framePixelMap !== null) {
         Image(this.framePixelMap)
           .width(this.getTransformedRect().width)
           .height(this.getTransformedRect().height)
@@ -1095,11 +1185,11 @@ export struct RemoteDesktopSurface {
             .fontColor(this.colors.mutedForeground)
             .fontSize(14)
         }
-      } else if (this.stage === SessionStage.Connected) {
+      } else if (this.stage === SessionStage.Connected && !this.isNativeSurfaceActive()) {
         Text(i18n.get(this.appLanguage, 'waiting_first_frame'))
           .fontColor(this.colors.mutedForeground)
           .fontSize(14)
-      } else {
+      } else if (this.stage !== SessionStage.Connected) {
         Text(i18n.get(this.appLanguage, 'connect_to_show_desktop'))
           .fontColor(this.colors.mutedForeground)
           .fontSize(14)

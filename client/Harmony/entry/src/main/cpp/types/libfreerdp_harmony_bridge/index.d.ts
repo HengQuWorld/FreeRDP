@@ -44,6 +44,7 @@ export interface NativeSessionSnapshot {
   dirtyHeight: number;
   frameStride: number;
   frameSequence: number;
+  nativeWindowBound: boolean;
 }
 
 export interface NativeSessionEvent {

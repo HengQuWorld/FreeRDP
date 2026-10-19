@@ -46,6 +46,9 @@ struct HarmonySurfaceSnapshot {
   std::uint32_t dirtyTop;
   std::uint32_t dirtyWidth;
   std::uint32_t dirtyHeight;
+  // True once frames are presented through a bound native window. The UI uses
+  // it to decide whether it still has to render the shared frame buffer.
+  bool nativeWindowBound;
 };
 
 enum class HarmonySessionStage : std::uint32_t {

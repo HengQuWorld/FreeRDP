@@ -45,6 +45,7 @@ typedef struct HarmonySurfaceSnapshotC {
   uint32_t dirtyTop;
   uint32_t dirtyWidth;
   uint32_t dirtyHeight;
+  uint8_t nativeWindowBound;
 } HarmonySurfaceSnapshotC;
 
 typedef struct HarmonySessionInfoC {

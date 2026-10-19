@@ -15,7 +15,8 @@ export class SessionViewModel {
     dirtyLeft: 0,
     dirtyTop: 0,
     dirtyWidth: 0,
-    dirtyHeight: 0
+    dirtyHeight: 0,
+    nativeWindowBound: false
   };
   remoteClipboardText: string = '';
   private lastObservedFrameSequence: number = 0;

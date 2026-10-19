@@ -160,6 +160,9 @@ class FreeRDPHarmonySession {
   // Native buffer setup failures repeat on every frame; report one per surface
   // binding so a real failure is still visible without flooding hilog.
   bool warnedNativeWindowFailure_;
+  // Geometry is re-applied on every frame until it sticks, so a failure is
+  // reported once instead of once per frame.
+  bool warnedGeometryFailure_;
   // True while frames are presented through the native window instead of the
   // shared frame buffer, which therefore holds an out-of-date frame.
   bool frameBufferStale_;

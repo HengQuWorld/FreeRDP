@@ -77,7 +77,7 @@ HarmonySurfaceSnapshot FreeRDPHarmonyAdapter::GetSnapshot(int sessionId) const {
   std::lock_guard<std::mutex> lock(mutex_);
   const std::shared_ptr<FreeRDPHarmonySession> session = GetSessionLocked(sessionId);
   if (!session) {
-    return HarmonySurfaceSnapshot{0, 0, 0, 0, 0, 0};
+    return HarmonySurfaceSnapshot{0, 0, 0, 0, 0, 0, false};
   }
   return session->GetSnapshot();
 }

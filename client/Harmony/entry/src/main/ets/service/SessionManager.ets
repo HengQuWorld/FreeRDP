@@ -72,7 +72,8 @@ class SessionManagerImpl {
       dirtyLeft: 0,
       dirtyTop: 0,
       dirtyWidth: 0,
-      dirtyHeight: 0
+      dirtyHeight: 0,
+      nativeWindowBound: false
     };
   }
 
@@ -254,8 +255,24 @@ class SessionManagerImpl {
   }
 
   async setSurfaceId(sessionId: number, surfaceId: string): Promise<void> {
-    if (sessionId > 0) {
-      await sessionBridge.setSurfaceId(sessionId, surfaceId);
+    if (sessionId <= 0) {
+      return;
+    }
+    await sessionBridge.setSurfaceId(sessionId, surfaceId);
+
+    // Binding or releasing a surface changes who renders the frames. The next
+    // frame event would carry that over eventually, but a desktop that is idle
+    // produces none, so publish it now instead of leaving the UI on the wrong
+    // render path until something on screen moves.
+    const record: SessionRecord | undefined = this.sessions.get(sessionId);
+    if (record === undefined) {
+      return;
+    }
+    try {
+      record.snapshot = sessionBridge.getSnapshot(sessionId);
+      this.notifyChanged();
+    } catch (e) {
+      logger.error(LogTags.SESSION_MANAGER, `Failed to refresh snapshot after surface change`, e);
     }
   }
 

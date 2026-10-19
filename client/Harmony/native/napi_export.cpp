@@ -320,6 +320,7 @@ napi_value BuildSnapshotObject(napi_env env, int sessionId) {
     SetNamedUint32(env, result, "dirtyHeight", 0);
     SetNamedUint32(env, result, "frameStride", 0);
     SetNamedUint64(env, result, "frameSequence", 0);
+    SetNamedBool(env, result, "nativeWindowBound", false);
     return result;
   }
 
@@ -331,6 +332,7 @@ napi_value BuildSnapshotObject(napi_env env, int sessionId) {
   SetNamedUint32(env, result, "dirtyHeight", snapshot.dirtyHeight);
   SetNamedUint32(env, result, "frameStride", harmony_session_get_frame_stride(sessionId));
   SetNamedUint64(env, result, "frameSequence", harmony_session_get_frame_sequence(sessionId));
+  SetNamedBool(env, result, "nativeWindowBound", snapshot.nativeWindowBound != 0);
   return result;
 }
 
@@ -1045,6 +1047,7 @@ int harmony_session_get_snapshot(int sessionId, HarmonySurfaceSnapshotC* snapsho
   snapshot->dirtyTop = value.dirtyTop;
   snapshot->dirtyWidth = value.dirtyWidth;
   snapshot->dirtyHeight = value.dirtyHeight;
+  snapshot->nativeWindowBound = value.nativeWindowBound ? 1 : 0;
   return 0;
 }
 
