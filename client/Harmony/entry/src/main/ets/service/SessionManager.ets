@@ -282,6 +282,17 @@ class SessionManagerImpl {
     }
   }
 
+  /**
+   * Closes the credential prompt without credentials. The native side abandons
+   * the attempt instead of retrying it, so the session does not come back as a
+   * logon failure the user never asked for.
+   */
+  async cancelAuth(sessionId: number): Promise<void> {
+    if (sessionId > 0) {
+      await sessionBridge.cancelAuth(sessionId);
+    }
+  }
+
   async submitCert(sessionId: number, accept: boolean): Promise<void> {
     if (sessionId > 0) {
       await sessionBridge.submitCert(sessionId, accept);

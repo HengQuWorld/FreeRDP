@@ -3,9 +3,11 @@
 #include "cancellation_noise.h"
 #include "command_line_redaction.h"
 #include "native_window_damage.h"
+#include "native_window_geometry.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cinttypes>
 #include <cerrno>
 #include <cctype>
@@ -116,6 +118,28 @@ static void ReplaceCString(char** target, const std::string& value) {
   if (!value.empty()) {
     *target = _strdup(value.c_str());
   }
+}
+
+// Overwrites a secret before releasing its storage. clear()/resize() alone only
+// shrink the string, which leaves the plaintext in freed heap memory where a
+// later allocation can hand it back out.
+static void SecureClear(std::string& secret) {
+  if (secret.empty()) {
+    return;
+  }
+  volatile char* data = secret.data();
+  for (std::size_t i = 0; i < secret.size(); ++i) {
+    data[i] = 0;
+  }
+  secret.clear();
+}
+
+// Monotonic milliseconds, used to pace work that must not repeat every frame.
+// steady_clock cannot jump backwards when the wall clock is adjusted.
+static std::int64_t NowMilliseconds() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
 
@@ -616,8 +640,11 @@ static BOOL HarmonyAuthenticateEx(freerdp* instance, char** username, char** pas
     return FALSE;
   }
 
-  session->FillAuthentication(username, password, domain, static_cast<std::uint32_t>(reason));
-  return TRUE;
+  const bool submitted = session->FillAuthentication(username, password, domain,
+                                                     static_cast<std::uint32_t>(reason));
+  // A false result is FreeRDP's AUTH_CANCELLED: it aborts the attempt instead
+  // of continuing with the empty credential strings.
+  return submitted ? TRUE : FALSE;
 }
 
 static DWORD HarmonyVerifyCertificateEx(freerdp* instance, const char* host, UINT16 port,
@@ -891,6 +918,7 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       warnedGeometryFailure_(false),
       frameBufferStale_(false),
       dialogAnswered_(false),
+      dialogCancelled_(false),
       certAccepted_(false),
       currentConnectionAttempt_(0),
       maxConnectionAttempts_(5),
@@ -1215,13 +1243,13 @@ bool FreeRDPHarmonySession::OnRemoteClipboardData(const std::string& text) {
   return true;
 }
 
-void FreeRDPHarmonySession::FillAuthentication(char** username, char** password, char** domain,
+bool FreeRDPHarmonySession::FillAuthentication(char** username, char** password, char** domain,
                                                std::uint32_t reason) {
   if (IsGatewayAuthReason(static_cast<rdp_auth_reason>(reason))) {
     ReplaceCString(username, config_.gatewayUsername.empty() ? config_.username : config_.gatewayUsername);
     ReplaceCString(password, config_.gatewayPassword.empty() ? config_.password : config_.gatewayPassword);
     ReplaceCString(domain, config_.gatewayDomain.empty() ? config_.domain : config_.gatewayDomain);
-    return;
+    return true;
   }
 
   const auto authReason = static_cast<rdp_auth_reason>(reason);
@@ -1231,7 +1259,7 @@ void FreeRDPHarmonySession::FillAuthentication(char** username, char** password,
     ReplaceCString(username, config_.username);
     ReplaceCString(password, config_.password);
     ReplaceCString(domain, config_.domain);
-    return;
+    return true;
   }
 
   switch (authReason) {
@@ -1244,13 +1272,13 @@ void FreeRDPHarmonySession::FillAuthentication(char** username, char** password,
       if ((*username != nullptr && **username != '\0') &&
           (*password != nullptr && **password != '\0')) {
         HiLogInfo("FillAuthentication: TLS/RDP with existing credentials, using them");
-        return;
+        return true;
       }
       HiLogInfo("FillAuthentication: TLS/RDP without credentials, returning empty for greeter");
       ReplaceCString(username, "");
       ReplaceCString(password, "");
       ReplaceCString(domain, "");
-      return;
+      return true;
 
     default:
       HiLogInfo("FillAuthentication: unknown reason=" + std::to_string(reason) + ", showing dialog");
@@ -1259,8 +1287,9 @@ void FreeRDPHarmonySession::FillAuthentication(char** username, char** password,
 
   std::unique_lock<std::mutex> lock(dialogMutex_);
   dialogAnswered_ = false;
+  dialogCancelled_ = false;
+  SecureClear(dialogPassword_);
   dialogUsername_.clear();
-  dialogPassword_.clear();
   dialogDomain_.clear();
 
   {
@@ -1277,17 +1306,27 @@ void FreeRDPHarmonySession::FillAuthentication(char** username, char** password,
 
   dialogCV_.wait(lock, [this]() { return dialogAnswered_ || stopRequested_; });
 
-  if (dialogAnswered_) {
+  // Only a real submission continues the attempt. Closing the prompt stops it:
+  // handing FreeRDP empty strings instead makes it report a logon failure, and
+  // the retry loop then asks for the password again, which the user cannot tell
+  // apart from the prompt never having closed.
+  const bool submitted = dialogAnswered_ && !dialogCancelled_;
+  if (submitted) {
     HiLogInfo("FillAuthentication: user provided credentials, username=" + dialogUsername_);
     ReplaceCString(username, dialogUsername_);
     ReplaceCString(password, dialogPassword_);
     ReplaceCString(domain, dialogDomain_);
   } else {
-    HiLogInfo("FillAuthentication: dialog cancelled or stop requested");
+    HiLogInfo("FillAuthentication: credential prompt closed without credentials");
     ReplaceCString(username, "");
     ReplaceCString(password, "");
     ReplaceCString(domain, "");
   }
+
+  // FreeRDP owns its own copy now; the plaintext must not outlive this call in
+  // the session, which keeps it for as long as the connection does.
+  SecureClear(dialogPassword_);
+  return submitted;
 }
 
 bool FreeRDPHarmonySession::VerifyCertificate(const char* host, std::uint16_t port,
@@ -1362,12 +1401,36 @@ bool FreeRDPHarmonySession::VerifyChangedCertificate(const char* host, std::uint
 }
 
 void FreeRDPHarmonySession::SubmitAuth(const std::string& username, const std::string& password, const std::string& domain) {
+  // Neither an empty user name nor an empty password can complete a logon here:
+  // FreeRDP reads them as "no credentials" and prompts again, which loops. The
+  // UI disables the confirm button for both, so reaching this with either empty
+  // means the dialog was dismissed; treat it as a cancel.
+  if (username.empty() || password.empty()) {
+    HiLogInfo("SubmitAuth: empty credential field, treating as cancel");
+    CancelAuth();
+    return;
+  }
+
   std::lock_guard<std::mutex> lock(dialogMutex_);
   dialogUsername_ = username;
+  SecureClear(dialogPassword_);
   dialogPassword_ = password;
   dialogDomain_ = domain;
+  dialogCancelled_ = false;
   dialogAnswered_ = true;
   dialogCV_.notify_all();
+}
+
+void FreeRDPHarmonySession::CancelAuth() {
+  std::lock_guard<std::mutex> lock(dialogMutex_);
+  dialogCancelled_ = true;
+  dialogAnswered_ = true;
+  dialogCV_.notify_all();
+}
+
+bool FreeRDPHarmonySession::IsAuthCancelled() const {
+  std::lock_guard<std::mutex> lock(dialogMutex_);
+  return dialogCancelled_;
 }
 
 void FreeRDPHarmonySession::SubmitCert(bool accept) {
@@ -1428,6 +1491,9 @@ void FreeRDPHarmonySession::SetSurfaceId(const std::string& surfaceIdStr) {
   }
   nativeGeometryWidth_ = 0;
   nativeGeometryHeight_ = 0;
+  // A new surface starts with an empty buffer queue, so the pacing that guards
+  // the first re-apply must not carry over from the previous one.
+  lastGeometryReapplyMs_ = -1;
   warnedNativeWindowFailure_ = false;
   warnedGeometryFailure_ = false;
   if (surfaceIdStr.empty()) {
@@ -1499,6 +1565,14 @@ bool FreeRDPHarmonySession::EnsureNativeWindowGeometryLocked(std::uint32_t width
   return true;
 }
 
+bool FreeRDPHarmonySession::CanReapplyNativeGeometryLocked(std::int64_t nowMs) {
+  if (!freerdp_harmony::CanReapplyNativeGeometry(nowMs, lastGeometryReapplyMs_)) {
+    return false;
+  }
+  lastGeometryReapplyMs_ = nowMs;
+  return true;
+}
+
 void FreeRDPHarmonySession::PresentToNativeWindowLocked(
     std::uint32_t width, std::uint32_t height, std::uint32_t left, std::uint32_t top,
     std::uint32_t dirtyWidth, std::uint32_t dirtyHeight, const std::uint8_t* data,
@@ -1518,7 +1592,10 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
 
   // A buffer allocated before the geometry change can still carry the old
   // dimensions. Re-apply the geometry and retry once; the copy below is
-  // clamped either way, so a second mismatch only costs a scaled frame.
+  // clamped either way, so a second mismatch only costs a scaled frame. The
+  // re-apply is paced: every stale buffer used to reset the geometry, which
+  // turned a single resize into one abort/re-apply per frame until the queue
+  // drained. Frames inside the cooldown are dropped instead.
   for (int attempt = 0; attempt < 2; ++attempt) {
     buffer = nullptr;
     fenceFd = -1;
@@ -1550,6 +1627,11 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
     }
     OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
     buffer = nullptr;
+    if (!CanReapplyNativeGeometryLocked(NowMilliseconds())) {
+      // Drop this frame rather than reset the queue again: the next one either
+      // finds a buffer with the new geometry or is paced in again.
+      break;
+    }
     nativeGeometryWidth_ = 0;
     nativeGeometryHeight_ = 0;
     EnsureNativeWindowGeometryLocked(width, height);
@@ -2311,7 +2393,17 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
   // bridge reads that to downgrade cancellation noise to INFO.
   const ScopedConnectSession connectSession(this);
   bool connected = false;
-  
+
+  // A cancel belongs to the attempt it was given for. Clear it here, where no
+  // other session lock is held (Connect() owns mutex_, and FillAuthentication
+  // takes the dialog lock before it, so nesting them would be lock-order
+  // inverted).
+  {
+    std::lock_guard<std::mutex> lock(dialogMutex_);
+    dialogCancelled_ = false;
+    dialogAnswered_ = false;
+  }
+
   while (!connected) {
     bool stopRequested = false;
     std::string currentProtocol;
@@ -2495,10 +2587,17 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
         std::lock_guard<std::mutex> lock(mutex_);
         cancelled = stopRequested_;
       }
+      const bool authCancelled = IsAuthCancelled();
 
       if (cancelled) {
         HiLogInfo("Connection attempt " + std::to_string(currentConnectionAttempt_ + 1) +
                   " cancelled by user request");
+      } else if (authCancelled) {
+        // Closing the credential prompt is a user decision, not a fault. It is
+        // also the end of this attempt: retrying would ask for the same
+        // password the user just declined to give.
+        HiLogInfo("Connection attempt " + std::to_string(currentConnectionAttempt_ + 1) +
+                  " cancelled at the credential prompt");
       } else {
         // 保存错误类型用于下一次尝试的优化
         lastErrorType_ = errorStr;
@@ -2514,10 +2613,24 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
         break;
       }
 
+      if (authCancelled) {
+        UpdateStage(HarmonySessionStage::kDisconnected, 0, "session.connection_cancelled");
+        break;
+      }
+
+      // The server rejected the account, so the remaining attempts would send
+      // the same credentials over other protocols. Each of them is another
+      // failed logon in the server's audit trail and another step towards its
+      // account lockout policy, so stop and say why.
+      if ((lastError == FREERDP_ERROR_CONNECT_LOGON_FAILURE) ||
+          (lastError == FREERDP_ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS)) {
+        UpdateStage(HarmonySessionStage::kFailed, lastError, "error.logon_failure");
+        break;
+      }
+
       // 检查是否还有更多尝试
       if (!PrepareNextConnectionAttempt()) {
-        UpdateStage(HarmonySessionStage::kFailed, lastError,
-                    std::string("error.connect_failed_all_attempts|||") + errorStr);
+        UpdateStage(HarmonySessionStage::kFailed, lastError, "error.connect_failed_all_attempts");
         break;
       }
       

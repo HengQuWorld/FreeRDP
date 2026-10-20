@@ -219,6 +219,19 @@ bool FreeRDPHarmonyAdapter::SubmitAuth(int sessionId, const std::string& usernam
   return true;
 }
 
+bool FreeRDPHarmonyAdapter::CancelAuth(int sessionId) {
+  std::shared_ptr<FreeRDPHarmonySession> session;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    session = GetSessionLocked(sessionId);
+  }
+  if (!session) {
+    return false;
+  }
+  session->CancelAuth();
+  return true;
+}
+
 bool FreeRDPHarmonyAdapter::SubmitCert(int sessionId, bool accept) {
   std::shared_ptr<FreeRDPHarmonySession> session;
   {

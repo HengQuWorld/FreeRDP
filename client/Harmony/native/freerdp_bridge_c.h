@@ -74,6 +74,7 @@ int harmony_session_send_unicode_key(int sessionId, uint16_t codepoint, uint8_t 
 int harmony_session_resize_desktop(int sessionId, uint32_t width, uint32_t height);
 int harmony_session_set_surface_id(int sessionId, const char* surfaceId);
 int harmony_session_submit_auth(int sessionId, const char* username, const char* password, const char* domain);
+int harmony_session_cancel_auth(int sessionId);
 int harmony_session_submit_cert(int sessionId, uint8_t accept);
 
 #ifdef __cplusplus

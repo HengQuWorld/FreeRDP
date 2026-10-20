@@ -32,6 +32,10 @@ class FreeRDPHarmonySession {
   // to tell a user cancellation apart from a real connection failure.
   bool IsStopRequested() const;
 
+  // True once the user closed the credential prompt. The connect loop uses it
+  // to end the attempt without reporting a failure.
+  bool IsAuthCancelled() const;
+
   // True once no thread can still be running inside the session, so the caller
   // may destroy it. False while a teardown is in flight.
   bool IsTeardownComplete() const;
@@ -44,7 +48,11 @@ class FreeRDPHarmonySession {
   std::vector<HarmonySessionEvent> DrainEvents();
   bool ShouldIgnoreCertificate() const;
   bool SetClipboardText(const std::string& text);
-  void FillAuthentication(char** username, char** password, char** domain, std::uint32_t reason);
+  // Fills the credentials FreeRDP asked for. Returns false when the user
+  // closed the prompt, so FreeRDP aborts the attempt instead of retrying it
+  // with empty credentials.
+  bool FillAuthentication(char** username, char** password, char** domain,
+                          std::uint32_t reason);
   bool VerifyCertificate(const char* host, std::uint16_t port, const char* commonName,
                          const char* subject, const char* issuer, const char* fingerprint,
                          std::uint32_t flags);
@@ -62,6 +70,9 @@ class FreeRDPHarmonySession {
   bool SendKeyScancode(std::uint32_t scancode, bool down);
   bool SendUnicodeKey(std::uint16_t codepoint, bool down);
   void SubmitAuth(const std::string& username, const std::string& password, const std::string& domain);
+  // Closes the credential prompt without credentials. The attempt is abandoned
+  // instead of being retried, which is what the user asked for by cancelling.
+  void CancelAuth();
   void SubmitCert(bool accept);
   void SetCertificateCommonName(const std::string& cn);
   void SetSurfaceId(const std::string& surfaceIdStr);
@@ -125,6 +136,10 @@ class FreeRDPHarmonySession {
   // Pins the native buffer geometry to the RDP desktop size. Requires mutex_ to
   // be held. Returns true when the window is bound to the requested size.
   bool EnsureNativeWindowGeometryLocked(std::uint32_t width, std::uint32_t height);
+  // True when a dequeued buffer still carrying the previous geometry may reset
+  // and re-apply that geometry. Paced so a resize cannot turn into one
+  // abort/SET_BUFFER_GEOMETRY pair per frame. Requires mutex_ to be held.
+  bool CanReapplyNativeGeometryLocked(std::int64_t nowMs);
   // Writes the current frame into a native buffer and flushes it. Requires
   // mutex_ to be held.
   void PresentToNativeWindowLocked(std::uint32_t width, std::uint32_t height,
@@ -186,6 +201,9 @@ class FreeRDPHarmonySession {
   // Geometry is re-applied on every frame until it sticks, so a failure is
   // reported once instead of once per frame.
   bool warnedGeometryFailure_;
+  // Timestamp of the last paced SET_BUFFER_GEOMETRY re-apply, in milliseconds;
+  // negative until the first one.
+  std::int64_t lastGeometryReapplyMs_ = -1;
   // True while frames are presented through the native window instead of the
   // shared frame buffer, which therefore holds an out-of-date frame.
   bool frameBufferStale_;
@@ -194,6 +212,9 @@ class FreeRDPHarmonySession {
   mutable std::mutex dialogMutex_;
   std::condition_variable dialogCV_;
   bool dialogAnswered_;
+  // Set when the user closed the prompt. FillAuthentication() reports it to
+  // FreeRDP, and the connect loop ends the attempt instead of retrying.
+  bool dialogCancelled_;
   bool certAccepted_;
   std::string dialogUsername_;
   std::string dialogPassword_;

@@ -10,10 +10,17 @@ export struct AuthDialog {
   username: string = '';
   password: string = '';
   domain: string = '';
+  // Drives the confirm button. Kept separate from the field values so a
+  // pre-filled user name does not make it look as if a password was given.
+  @State private canConfirm: boolean = false;
   @StorageLink('__app_is_dark_mode__') @Watch('onThemeChanged') isDark: boolean = false;
   @StorageLink('__app_language__') appLanguage: string = 'system';
   @State colors: ThemeColors = LightColors;
   onConfirm: (username: string, password: string, domain: string) => void = () => {};
+  // Cancelling must end the connection attempt. Reporting empty credentials
+  // instead made the server answer "no such user", which the retry loop turned
+  // into another prompt, so the dialog kept coming back.
+  onCancel: () => void = () => {};
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
@@ -21,6 +28,11 @@ export struct AuthDialog {
 
   aboutToAppear(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
+    this.updateCanConfirm();
+  }
+
+  private updateCanConfirm(): void {
+    this.canConfirm = this.username.length > 0 && this.password.length > 0;
   }
 
   build() {
@@ -51,6 +63,7 @@ export struct AuthDialog {
         })
         .onChange((value: string) => {
           this.username = value;
+          this.updateCanConfirm();
         })
         .margin({ bottom: 12 })
 
@@ -70,6 +83,7 @@ export struct AuthDialog {
         })
         .onChange((value: string) => {
           this.password = value;
+          this.updateCanConfirm();
         })
         .margin({ bottom: 12 })
 
@@ -101,7 +115,7 @@ export struct AuthDialog {
           .fontColor(this.colors.foreground)
           .borderRadius(12)
           .onClick(() => {
-            this.onConfirm('', '', '');
+            this.onCancel();
             this.controller.close();
           })
 
@@ -113,6 +127,10 @@ export struct AuthDialog {
           .backgroundColor(this.colors.primary)
           .fontColor(this.colors.primaryForeground)
           .borderRadius(12)
+          // An empty field cannot complete a logon: FreeRDP reads it as "no
+          // credentials" and prompts again, which looks like the dialog looping.
+          .enabled(this.canConfirm)
+          .opacity(this.canConfirm ? 1.0 : 0.4)
           .onClick(() => {
             this.onConfirm(this.username, this.password, this.domain);
             this.controller.close();

@@ -11,6 +11,14 @@ import { i18n } from '../utils/I18n';
 // fallback if a device ever misbehaves with it.
 const NATIVE_SURFACE_ENABLED: boolean = true;
 
+// The server can drop a monitor layout while it is still setting the session
+// up, so the request is repeated until the desktop reports the new size. Five
+// sends were needed on the emulator against a Windows 11 host (the server
+// answered 1920x1080 twice before accepting 1960x1226), so the budget has to
+// stay above that: stopping earlier means auto fit never applies on a slow
+// server. Only the give-up case is new; the count is unchanged.
+const kMaxDesktopResizeRetries: number = 6;
+
 const PTR_FLAGS_BUTTON1: number = 0x1000;
 const PTR_FLAGS_BUTTON2: number = 0x2000;
 const PTR_FLAGS_BUTTON3: number = 0x4000;
@@ -62,6 +70,9 @@ export struct RemoteDesktopSurface {
   onSurfaceSizeChange: (width: number, height: number) => void = (_width: number, _height: number): void => {};
   onRequestDesktopSize: (width: number, height: number) => void =
     (_width: number, _height: number): void => {};
+  // Called once per viewport when the server would not take the fitted size, so
+  // the session can say why the picture did not fill the window.
+  onDesktopResizeUnsupported: () => void = (): void => {};
   @Prop @Watch('onZoomInTriggered') zoomInToken: number = 0;
   @Prop @Watch('onZoomOutTriggered') zoomOutToken: number = 0;
   @Prop @Watch('onZoomResetTriggered') zoomResetToken: number = 0;
@@ -81,6 +92,9 @@ export struct RemoteDesktopSurface {
   private desktopResizeTimer: number = -1;
   private desktopResizeRetryTimer: number = -1;
   private desktopResizeRetries: number = 0;
+  // The "server kept its own size" notice belongs to one viewport state; it is
+  // re-armed when the view or the session changes.
+  private desktopResizeUnsupportedNotified: boolean = false;
   private requestedDesktopWidth: number = 0;
   private requestedDesktopHeight: number = 0;
   private renderedFrameSequence: number = 0;
@@ -388,6 +402,7 @@ export struct RemoteDesktopSurface {
     }
 
     this.desktopResizeRetries = 0;
+    this.desktopResizeUnsupportedNotified = false;
     this.sendDesktopResizeRequest(width, height);
   }
 
@@ -435,9 +450,15 @@ export struct RemoteDesktopSurface {
         Math.abs(this.snapshot.height - height) <= 2) {
         return;
       }
-      if (this.desktopResizeRetries >= 6) {
+      if (this.desktopResizeRetries >= kMaxDesktopResizeRetries) {
         // The server refused the layout; the view keeps fitting the desktop
-        // it does have, so stop asking until the viewport changes again.
+        // it does have, so stop asking until the viewport changes again. Say so
+        // once: otherwise the desktop silently keeps its own resolution and the
+        // empty bands look like a rendering bug.
+        if (!this.desktopResizeUnsupportedNotified) {
+          this.desktopResizeUnsupportedNotified = true;
+          this.onDesktopResizeUnsupported();
+        }
         return;
       }
       this.desktopResizeRetries += 1;

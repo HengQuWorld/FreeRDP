@@ -21,6 +21,7 @@ export struct SessionWindow {
   onMouseMove: (x: number, y: number) => void = (_x: number, _y: number): void => {};
   onRequestDesktopSize: (width: number, height: number) => void =
     (_width: number, _height: number): void => {};
+  onDesktopResizeUnsupported: () => void = (): void => {};
   onMouseButton: (x: number, y: number, buttonFlags: number, down: boolean) => void =
     (_x: number, _y: number, _buttonFlags: number, _down: boolean): void => {};
   onMouseWheel: (x: number, y: number, delta: number) => void =
@@ -142,6 +143,7 @@ export struct SessionWindow {
         setSurfaceId: this.setSurfaceId,
         onMouseMove: this.onMouseMove,
         onRequestDesktopSize: this.onRequestDesktopSize,
+        onDesktopResizeUnsupported: this.onDesktopResizeUnsupported,
         onMouseButton: (x, y, btn, down) => {
           this.extendChromeInteractionIfVisible();
           this.onMouseButton(x, y, btn, down);

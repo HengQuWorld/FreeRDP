@@ -71,6 +71,7 @@ export const getSnapshot: (sessionId: number) => NativeSessionSnapshot;
 export const getFrameBuffer: (sessionId: number) => ArrayBuffer;
 export const setSurfaceId: (sessionId: number, surfaceId: string) => void;
 export const submitAuth: (sessionId: number, username: string, pass: string, domain: string) => void;
+export const cancelAuth: (sessionId: number) => void;
 export const submitCert: (sessionId: number, accept: boolean) => void;
 export const getLastErrorString: (sessionId: number) => string;
 export const drainEvents: (sessionId: number) => NativeSessionEvent[];

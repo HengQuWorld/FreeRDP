@@ -100,4 +100,9 @@ else()
   # control channel, is coalesced, and is not published twice to the UI.
   add_executable(test_desktop_resize test_desktop_resize.cpp)
   target_include_directories(test_desktop_resize PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+  # Header-only check that a stale native buffer cannot reset the buffer
+  # geometry once per frame.
+  add_executable(test_window_geometry test_window_geometry.cpp)
+  target_include_directories(test_window_geometry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 endif()

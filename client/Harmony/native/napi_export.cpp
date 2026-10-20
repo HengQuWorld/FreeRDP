@@ -60,6 +60,10 @@ int harmony_session_submit_auth(int sessionId, const char* username, const char*
                               domain != nullptr ? domain : "") ? 0 : -1;
 }
 
+int harmony_session_cancel_auth(int sessionId) {
+  return Adapter().CancelAuth(sessionId) ? 0 : -1;
+}
+
 int harmony_session_submit_cert(int sessionId, uint8_t accept) {
   return Adapter().SubmitCert(sessionId, accept != 0) ? 0 : -1;
 }
@@ -149,6 +153,47 @@ bool GetNamedString(napi_env env, napi_value object, const char* name, std::stri
   buffer.resize(written);
   *out = buffer;
   return true;
+}
+
+// Reads a string argument without a fixed-size buffer: the length comes from
+// the value itself, so nothing is silently truncated.
+bool GetStringValue(napi_env env, napi_value value, std::string* out) {
+  if ((env == nullptr) || (value == nullptr) || (out == nullptr)) {
+    return false;
+  }
+
+  napi_valuetype type = napi_undefined;
+  if ((napi_typeof(env, value, &type) != napi_ok) || (type != napi_string)) {
+    return false;
+  }
+
+  size_t length = 0;
+  if (napi_get_value_string_utf8(env, value, nullptr, 0, &length) != napi_ok) {
+    return false;
+  }
+
+  // Room for the terminator is part of the string, so nothing is written past
+  // the end of the allocation.
+  std::string buffer(length + 1, '\0');
+  size_t written = 0;
+  if (napi_get_value_string_utf8(env, value, buffer.data(), buffer.size(), &written) != napi_ok) {
+    return false;
+  }
+  buffer.resize(written);
+  *out = buffer;
+  return true;
+}
+
+// Overwrites a secret before its storage is released.
+void SecureZeroString(std::string& secret) {
+  if (secret.empty()) {
+    return;
+  }
+  volatile char* data = secret.data();
+  for (std::size_t i = 0; i < secret.size(); ++i) {
+    data[i] = 0;
+  }
+  secret.clear();
 }
 
 bool GetNamedUint16(napi_env env, napi_value object, const char* name, std::uint16_t* out) {
@@ -703,18 +748,36 @@ napi_value SubmitAuthNapi(napi_env env, napi_callback_info info) {
     return nullptr;
   }
 
-  char username[256] = {0};
-  size_t length = 0;
-  napi_get_value_string_utf8(env, argv[1], username, sizeof(username), &length);
+  // Sized from the argument itself: the fixed 256-byte buffers this used to
+  // have silently truncated a long password, which failed the logon with an
+  // error the user could not act on.
+  std::string username;
+  std::string password;
+  std::string domain;
+  if (!GetStringValue(env, argv[1], &username) || !GetStringValue(env, argv[2], &password) ||
+      !GetStringValue(env, argv[3], &domain)) {
+    return nullptr;
+  }
 
-  char password[256] = {0};
-  napi_get_value_string_utf8(env, argv[2], password, sizeof(password), &length);
+  harmony_session_submit_auth(sessionId, username.c_str(), password.c_str(), domain.c_str());
 
-  char domain[256] = {0};
-  napi_get_value_string_utf8(env, argv[3], domain, sizeof(domain), &length);
+  // The native side kept its own copy; wipe this one instead of leaving the
+  // plaintext in a freed heap block.
+  SecureZeroString(password);
 
-  harmony_session_submit_auth(sessionId, username, password, domain);
-  
+  napi_value result = nullptr;
+  napi_get_undefined(env, &result);
+  return result;
+}
+
+napi_value CancelAuthNapi(napi_env env, napi_callback_info info) {
+  std::int32_t sessionId = 0;
+  if (!GetInt32Arg(env, info, &sessionId)) {
+    return nullptr;
+  }
+
+  harmony_session_cancel_auth(sessionId);
+
   napi_value result = nullptr;
   napi_get_undefined(env, &result);
   return result;
@@ -953,6 +1016,8 @@ static napi_value Init(napi_env env, napi_value exports) {
     { "setSurfaceId", nullptr, SetSurfaceIdNapi, nullptr, nullptr, nullptr,
       kDefaultPropertyAttributes, nullptr },
     { "submitAuth", nullptr, SubmitAuthNapi, nullptr, nullptr, nullptr,
+      kDefaultPropertyAttributes, nullptr },
+    { "cancelAuth", nullptr, CancelAuthNapi, nullptr, nullptr, nullptr,
       kDefaultPropertyAttributes, nullptr },
     { "submitCert", nullptr, SubmitCertNapi, nullptr, nullptr, nullptr,
       kDefaultPropertyAttributes, nullptr },

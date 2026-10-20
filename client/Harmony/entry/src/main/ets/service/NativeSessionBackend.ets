@@ -9,6 +9,7 @@ import {
   getLastErrorString as nativeGetLastErrorString,
   drainEvents as nativeDrainEvents,
   submitAuth as nativeSubmitAuth,
+  cancelAuth as nativeCancelAuth,
   submitCert as nativeSubmitCert,
   setClipboardText as nativeSetClipboardText,
   sendMouseMove as nativeSendMouseMove,
@@ -38,6 +39,15 @@ const NATIVE_STAGE_FAILED: number = 4;
 const NATIVE_STAGE_AUTH_REQUIRED: number = 5;
 const NATIVE_STAGE_CERT_REQUIRED: number = 6;
 
+// FreeRDP connect error codes (MAKE_FREERDP_ERROR(CONNECT, ...)). The native
+// layer reports the code and a generic message; these are the causes a user can
+// actually act on, so they get their own wording instead of a raw English
+// string from the library.
+const ERROR_CONNECT_TLS_FAILED: number = 0x00020008;
+const ERROR_CONNECT_TRANSPORT_FAILED: number = 0x0002000d;
+const ERROR_CONNECT_LOGON_FAILURE: number = 0x00020014;
+const ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS: number = 0x0002001b;
+
 export interface SessionBackend {
   createSession(profile: ConnectionProfile): number;
   connect(sessionId: number): Promise<SessionState>;
@@ -48,6 +58,7 @@ export interface SessionBackend {
   setSurfaceId(sessionId: number, surfaceId: string): Promise<void>;
   drainEvents(sessionId: number): SessionEvent[];
   submitAuth(sessionId: number, username: string, pass: string, domain: string): Promise<void>;
+  cancelAuth(sessionId: number): Promise<void>;
   submitCert(sessionId: number, accept: boolean): Promise<void>;
   setClipboardText(sessionId: number, text: string): Promise<void>;
   sendMouseMove(sessionId: number, x: number, y: number): Promise<void>;
@@ -217,6 +228,26 @@ class NativeSessionBackendImpl implements SessionBackend {
       : baseMessage;
   }
 
+  /**
+   * Maps a FreeRDP connect error to a message key. An empty result means the
+   * native message already says everything the user can be told.
+   */
+  private failureMessageKey(lastError: number): string {
+    if (lastError === ERROR_CONNECT_LOGON_FAILURE ||
+        lastError === ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS) {
+      return 'error.logon_failure';
+    }
+    if (lastError === ERROR_CONNECT_TRANSPORT_FAILED) {
+      return 'error.transport_failed';
+    }
+    if (lastError === ERROR_CONNECT_TLS_FAILED) {
+      return 'error.tls_failed';
+    }
+    // A cancelled attempt is reported as an ordinary disconnect by the native
+    // side; its own message is already localised, so nothing to substitute.
+    return '';
+  }
+
   private buildState(sessionId: number, nativeInfo: NativeSessionInfo,
                      profile: ConnectionProfile): SessionState {
     const stage: SessionStage = this.mapStage(nativeInfo.stage, nativeInfo.connected);
@@ -228,7 +259,14 @@ class NativeSessionBackendImpl implements SessionBackend {
     const baseMessage: string = nativeInfo.message.length > 0
       ? this.translateNativeMessage(nativeInfo.message)
       : this.defaultMessage(stage);
-    const message: string = this.enrichMessage(sessionId, stage, nativeInfo, baseMessage);
+    // A known cause gets its own localised sentence; anything else keeps the
+    // native message plus the library error text.
+    const failureKey: string = (stage === SessionStage.Error || stage === SessionStage.Disconnected)
+      ? this.failureMessageKey(nativeInfo.lastError)
+      : '';
+    const message: string = failureKey.length > 0
+      ? i18n.get(i18n.currentLocale(), failureKey)
+      : this.enrichMessage(sessionId, stage, nativeInfo, baseMessage);
 
     return {
       sessionId: sessionId,
@@ -349,6 +387,11 @@ class NativeSessionBackendImpl implements SessionBackend {
   async setClipboardText(sessionId: number, text: string): Promise<void> {
     this.requireRecord(sessionId);
     this.requireNativeOk(nativeSetClipboardText(sessionId, text), 'setClipboardText');
+  }
+
+  async cancelAuth(sessionId: number): Promise<void> {
+    this.requireRecord(sessionId);
+    nativeCancelAuth(sessionId);
   }
 
   async submitAuth(sessionId: number, username: string, pass: string, domain: string): Promise<void> {

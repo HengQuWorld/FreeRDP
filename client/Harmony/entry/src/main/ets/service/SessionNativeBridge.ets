@@ -12,6 +12,7 @@ export interface SessionBridge {
   setSurfaceId(sessionId: number, surfaceId: string): Promise<void>;
   drainEvents(sessionId: number): SessionEvent[];
   submitAuth(sessionId: number, username: string, pass: string, domain: string): Promise<void>;
+  cancelAuth(sessionId: number): Promise<void>;
   submitCert(sessionId: number, accept: boolean): Promise<void>;
   setClipboardText(sessionId: number, text: string): Promise<void>;
   sendMouseMove(sessionId: number, x: number, y: number): Promise<void>;
@@ -61,6 +62,10 @@ class DefaultSessionBridge implements SessionBridge {
 
   async submitAuth(sessionId: number, username: string, pass: string, domain: string): Promise<void> {
     await sessionBackend.submitAuth(sessionId, username, pass, domain);
+  }
+
+  async cancelAuth(sessionId: number): Promise<void> {
+    await sessionBackend.cancelAuth(sessionId);
   }
 
   async submitCert(sessionId: number, accept: boolean): Promise<void> {

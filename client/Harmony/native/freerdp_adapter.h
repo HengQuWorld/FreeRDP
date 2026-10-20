@@ -120,6 +120,7 @@ class FreeRDPHarmonyAdapter {
   bool SendKeyScancode(int sessionId, std::uint32_t scancode, bool down);
   bool SendUnicodeKey(int sessionId, std::uint16_t codepoint, bool down);
   bool SubmitAuth(int sessionId, const std::string& username, const std::string& password, const std::string& domain);
+  bool CancelAuth(int sessionId);
   bool SubmitCert(int sessionId, bool accept);
 
  private:

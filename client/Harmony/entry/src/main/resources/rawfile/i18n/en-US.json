@@ -195,6 +195,10 @@
     "disconnected_overlay_title": "Disconnected",
     "disconnected_overlay_hint": "Remote desktop connection has been closed",
     "error_overlay_title": "Connection Failed",
-    "back_to_home": "Back"
+    "back_to_home": "Back",
+    "error.logon_failure": "Sign-in failed: the user name or password is incorrect",
+    "error.transport_failed": "Could not reach the remote desktop: the connection was interrupted",
+    "error.tls_failed": "Could not establish the secure connection; check the server certificate and encryption settings",
+    "session.desktop_resize_unsupported": "The remote desktop did not accept the fitted size; showing its native resolution instead"
   }
 }

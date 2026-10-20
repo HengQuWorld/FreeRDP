@@ -195,6 +195,10 @@
     "disconnected_overlay_title": "连接已断开",
     "disconnected_overlay_hint": "远程桌面连接已关闭",
     "error_overlay_title": "连接失败",
-    "back_to_home": "返回"
+    "back_to_home": "返回",
+    "error.logon_failure": "登录失败：用户名或密码不正确",
+    "error.transport_failed": "无法连接到远程桌面：网络传输中断",
+    "error.tls_failed": "安全连接建立失败，请检查服务端证书与加密设置",
+    "session.desktop_resize_unsupported": "远程桌面未接受自动适配的尺寸，已按原分辨率显示"
   }
 }

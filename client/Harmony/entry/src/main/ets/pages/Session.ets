@@ -80,6 +80,11 @@ struct Session {
         if (this.sessionId > 0) {
           void sessionManager.submitAuth(this.sessionId, username, pass, domain);
         }
+      },
+      onCancel: () => {
+        if (this.sessionId > 0) {
+          void sessionManager.cancelAuth(this.sessionId);
+        }
       }
     }),
     alignment: DialogAlignment.Center,
@@ -344,6 +349,9 @@ struct Session {
         },
         onRequestDesktopSize: async (width: number, height: number) => {
           await sessionManager.resizeDesktop(this.sessionId, width, height);
+        },
+        onDesktopResizeUnsupported: () => {
+          this.showToast(i18n.get(this.appLanguage, 'session.desktop_resize_unsupported'), false);
         },
         onMouseButton: async (x: number, y: number, buttonFlags: number, down: boolean) => {
           await sessionManager.sendMouseButton(this.sessionId, x, y, buttonFlags, down);
