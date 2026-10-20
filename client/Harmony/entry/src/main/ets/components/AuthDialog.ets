@@ -35,6 +35,16 @@ export struct AuthDialog {
     this.canConfirm = this.username.length > 0 && this.password.length > 0;
   }
 
+  // Used by both the confirm button and the Enter key. Without a submit
+  // handler Enter only dismisses the keyboard and the dialog stays open.
+  private submit(): void {
+    if (!this.canConfirm) {
+      return;
+    }
+    this.onConfirm(this.username, this.password, this.domain);
+    this.controller.close();
+  }
+
   build() {
     Column() {
       Text(i18n.get(this.appLanguage, 'auth_required'))
@@ -58,6 +68,10 @@ export struct AuthDialog {
         .fontColor(this.colors.foreground)
         .focusOnTouch(false)
         .id('authDialog_user')
+        .enterKeyType(EnterKeyType.Done)
+        .onSubmit(() => {
+          this.submit();
+        })
         .onClick(() => {
           showKeyboardForField(this.getUIContext(),'authDialog_user');
         })
@@ -78,6 +92,10 @@ export struct AuthDialog {
         .fontColor(this.colors.foreground)
         .focusOnTouch(false)
         .id('authDialog_pass')
+        .enterKeyType(EnterKeyType.Done)
+        .onSubmit(() => {
+          this.submit();
+        })
         .onClick(() => {
           showKeyboardForField(this.getUIContext(),'authDialog_pass');
         })
@@ -97,6 +115,10 @@ export struct AuthDialog {
         .fontColor(this.colors.foreground)
         .focusOnTouch(false)
         .id('authDialog_domain')
+        .enterKeyType(EnterKeyType.Done)
+        .onSubmit(() => {
+          this.submit();
+        })
         .onClick(() => {
           showKeyboardForField(this.getUIContext(),'authDialog_domain');
         })
@@ -132,8 +154,7 @@ export struct AuthDialog {
           .enabled(this.canConfirm)
           .opacity(this.canConfirm ? 1.0 : 0.4)
           .onClick(() => {
-            this.onConfirm(this.username, this.password, this.domain);
-            this.controller.close();
+            this.submit();
           })
       }
       .width('100%')
