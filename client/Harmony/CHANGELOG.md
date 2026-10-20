@@ -9,6 +9,7 @@ Added
   The desktop uses the whole screen. A new “Auto fit” resolution, the default for new connections, re-lays the desktop out for the window as you resize it or go full screen, instead of shrinking it into the middle with empty bands above and below. Fixed resolutions keep working as before.
 
 Improved
+  Navigation buttons repeat while held. Press and hold to keep zooming or panning instead of tapping over and over.
   Lighter frame handling. Frames are drawn straight into the window instead of being copied whole on every redraw, and a still desktop is no longer refreshed over and over, so long sessions use less power and low-end devices keep up better.
   Connections open smoothly. Setting up a connection no longer runs on the thread that draws, so the interface stays responsive while a session opens.
   A leaner download. Release builds no longer carry the runtime checks that only debugging needs.

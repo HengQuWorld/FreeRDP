@@ -4,6 +4,12 @@ import { SessionToolbar } from './SessionToolbar';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 
+// Hold-to-repeat for the navigation pad. A short delay keeps a single tap
+// distinct; after that the step fires at a steady rate while the finger is held.
+const NAV_REPEAT_START_DELAY_MS: number = 300;
+const NAV_REPEAT_INTERVAL_MS: number = 80;
+const NAV_REPEAT_KEYS: string[] = ['zoomOut', 'zoomIn', 'up', 'down', 'left', 'right'];
+
 @Component
 export struct SessionWindow {
   @Prop sessionId: number;
@@ -55,6 +61,44 @@ export struct SessionWindow {
   private navPadDragStartX: number = 0;
   private navPadDragStartY: number = 0;
   private navPadInited: boolean = false;
+  private navRepeatTimers: Record<string, number> = {};
+  private navRepeatDelayTimers: Record<string, number> = {};
+
+  private startNavRepeat(key: string, onStep: () => void): void {
+    if (this.stage !== SessionStage.Connected) return;
+    this.stopNavRepeat(key);
+    onStep();
+    this.extendChromeInteractionIfVisible();
+    this.navRepeatDelayTimers[key] = setTimeout(() => {
+      this.navRepeatDelayTimers[key] = 0;
+      this.navRepeatTimers[key] = setInterval(() => {
+        if (this.stage !== SessionStage.Connected) {
+          this.stopNavRepeat(key);
+          return;
+        }
+        onStep();
+      }, NAV_REPEAT_INTERVAL_MS);
+    }, NAV_REPEAT_START_DELAY_MS);
+  }
+
+  private stopNavRepeat(key: string): void {
+    const delayTimer = this.navRepeatDelayTimers[key];
+    if (delayTimer > 0) {
+      clearTimeout(delayTimer);
+    }
+    this.navRepeatDelayTimers[key] = 0;
+    const repeatTimer = this.navRepeatTimers[key];
+    if (repeatTimer > 0) {
+      clearInterval(repeatTimer);
+    }
+    this.navRepeatTimers[key] = 0;
+  }
+
+  private stopAllNavRepeats(): void {
+    for (let i = 0; i < NAV_REPEAT_KEYS.length; i++) {
+      this.stopNavRepeat(NAV_REPEAT_KEYS[i]);
+    }
+  }
 
   onThemeChanged(): void {
     this.colors = this.isDark ? DarkColors : LightColors;
@@ -68,6 +112,7 @@ export struct SessionWindow {
         this.chromeHideTimer = -1;
       }
     }
+    this.stopAllNavRepeats();
   }
 
   private scheduleChromeAutoHide(): void {
@@ -111,6 +156,7 @@ export struct SessionWindow {
       clearTimeout(this.chromeHideTimer);
       this.chromeHideTimer = -1;
     }
+    this.stopAllNavRepeats();
   }
 
   private getConnectionStateColor(): string {
@@ -284,6 +330,8 @@ export struct SessionWindow {
                 this.showNavigationPad = !this.showNavigationPad;
                 if (this.showNavigationPad) {
                   this.ensureNavPadPosition();
+                } else {
+                  this.stopAllNavRepeats();
                 }
                 this.extendChromeInteractionIfVisible();
               },
@@ -339,33 +387,27 @@ export struct SessionWindow {
   private buildNavigationPad(): void {
     Column({ space: 4 }) {
       Row({ space: 8 }) {
-        this.buildNavButton('−', () => {
+        this.buildNavButton('zoomOut', '−', () => {
           this.zoomOutToken += 1;
-          this.extendChromeInteractionIfVisible();
         })
-        this.buildNavButton('+', () => {
+        this.buildNavButton('zoomIn', '+', () => {
           this.zoomInToken += 1;
-          this.extendChromeInteractionIfVisible();
         })
       }
       Blank().height(8)
-      this.buildNavButton('▲', () => {
+      this.buildNavButton('up', '▲', () => {
         this.panUpToken += 1;
-        this.extendChromeInteractionIfVisible();
       })
       Row({ space: 52 }) {
-        this.buildNavButton('◀', () => {
+        this.buildNavButton('left', '◀', () => {
           this.panLeftToken += 1;
-          this.extendChromeInteractionIfVisible();
         })
-        this.buildNavButton('▶', () => {
+        this.buildNavButton('right', '▶', () => {
           this.panRightToken += 1;
-          this.extendChromeInteractionIfVisible();
         })
       }
-      this.buildNavButton('▼', () => {
+      this.buildNavButton('down', '▼', () => {
         this.panDownToken += 1;
-        this.extendChromeInteractionIfVisible();
       })
     }
     .alignItems(HorizontalAlign.Center)
@@ -385,8 +427,10 @@ export struct SessionWindow {
       } else if (ev.type === TouchType.Move) {
         const dx = ev.touches[0].x - this.navPadDragStartX;
         const dy = ev.touches[0].y - this.navPadDragStartY;
-        if (Math.abs(dx) + Math.abs(dy) > 8) {
+        if (!this.navPadDragging && Math.abs(dx) + Math.abs(dy) > 8) {
           this.navPadDragging = true;
+          // The pad is being moved, not operated: release any held button.
+          this.stopAllNavRepeats();
         }
         if (this.navPadDragging) {
           this.navPadX += dx;
@@ -401,7 +445,7 @@ export struct SessionWindow {
   }
 
   @Builder
-  private buildNavButton(label: string, onTap: () => void): void {
+  private buildNavButton(key: string, label: string, onStep: () => void): void {
     Button() {
       Text(label)
         .fontSize(20)
@@ -413,6 +457,12 @@ export struct SessionWindow {
     .borderRadius(12)
     .type(ButtonType.Normal)
     .enabled(this.stage === SessionStage.Connected)
-    .onClick(onTap)
+    .onTouch((ev: TouchEvent) => {
+      if (ev.type === TouchType.Down) {
+        this.startNavRepeat(key, onStep);
+      } else if (ev.type === TouchType.Up || ev.type === TouchType.Cancel) {
+        this.stopNavRepeat(key);
+      }
+    })
   }
 }
