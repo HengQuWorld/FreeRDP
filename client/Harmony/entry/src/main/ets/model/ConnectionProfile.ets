@@ -89,6 +89,26 @@ export interface ConnectionProfile {
 export const DEFAULT_DESKTOP_WIDTH: number = 1920;
 export const DEFAULT_DESKTOP_HEIGHT: number = 1080;
 
+/** RDP 的默认端口。端口输入框留空时就按它连接。 */
+export const DEFAULT_RDP_PORT: number = 3389;
+
+/**
+ * 把端口输入框的文本解析成端口号。
+ * 空文本、非数字、非整数、0 或大于 65535 都返回 0，表示“不是有效端口”，
+ * 由调用方决定回退到 DEFAULT_RDP_PORT 还是保留上一次的有效值。
+ */
+export function parseRdpPort(text: string): number {
+  const trimmed: string = text.trim();
+  if (trimmed.length === 0) {
+    return 0;
+  }
+  const parsed: number = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+    return 0;
+  }
+  return parsed;
+}
+
 // A zero size means "follow the session viewport". The client then asks the
 // remote side to lay the desktop out at the surface size, so the image fills
 // the device screen instead of being letterboxed above and below.
@@ -104,7 +124,7 @@ export function createEmptyProfile(id: string): ConnectionProfile {
     id: id,
     name: '',
     host: '',
-    port: 3389,
+    port: DEFAULT_RDP_PORT,
     clientHostname: '',
     username: '',
     password: '',

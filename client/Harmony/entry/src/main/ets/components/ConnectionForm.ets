@@ -1,4 +1,4 @@
-import { ConnectionProfile, DriveRedirection, deriveDriveName, AUTO_DESKTOP_WIDTH, AUTO_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
+import { ConnectionProfile, DriveRedirection, deriveDriveName, parseRdpPort, DEFAULT_RDP_PORT, AUTO_DESKTOP_WIDTH, AUTO_DESKTOP_HEIGHT } from '../model/ConnectionProfile';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 import { showKeyboardForField } from '../utils/KeyboardHelper';
@@ -32,7 +32,8 @@ export struct ConnectionForm {
   @State driveExpanded: boolean = false;
   @State connectionName: string = '';
   @State hostAddress: string = '';
-  @State portNumber: string = '3389';
+  // 空字符串表示“使用默认端口”，由占位符告知 3389，和留空语义一致
+  @State portNumber: string = '';
   @State userName: string = '';
   @State domainName: string = '';
   @State passwordValue: string = '';
@@ -64,7 +65,6 @@ export struct ConnectionForm {
   onUpdateDriveRedirection: (index: number, name: string, path: string) => void
     = (_i: number, _n: string, _p: string): void => {};
   onRemoveDriveRedirection: (index: number) => void = (_i: number): void => {};
-  onNew: () => void = (): void => {};
   onSave: () => void = (): void => {};
   onConnect: () => void = (): void => {};
 
@@ -79,10 +79,7 @@ export struct ConnectionForm {
     if (this.hostAddress !== this.profile.host) {
       this.hostAddress = this.profile.host;
     }
-    const portStr = `${this.profile.port}`;
-    if (this.portNumber !== portStr) {
-      this.portNumber = portStr;
-    }
+    this.syncPortField();
     if (this.userName !== this.profile.username) {
       this.userName = this.profile.username;
     }
@@ -115,7 +112,7 @@ export struct ConnectionForm {
   private syncFromProfile(): void {
     this.connectionName = this.profile.name;
     this.hostAddress = this.profile.host;
-    this.portNumber = `${this.profile.port}`;
+    this.portNumber = this.profile.port === DEFAULT_RDP_PORT ? '' : `${this.profile.port}`;
     this.userName = this.profile.username;
     this.domainName = this.profile.domain;
     this.passwordValue = this.profile.password;
@@ -124,6 +121,28 @@ export struct ConnectionForm {
     this.gatewayPasswordValue = this.profile.gatewayPassword;
     this.gatewayDomainName = this.profile.gatewayDomain;
     this.syncDriveRedirections();
+  }
+
+  /**
+   * 把 port 字段与 profile.port 对齐。
+   * 空输入框表示“用默认端口”，不把 3389 强塞回框里；
+   * 用户正在输入的半截内容也不会被回写打断。
+   */
+  private syncPortField(): void {
+    const text: string = this.portNumber.trim();
+    if (text.length === 0) {
+      if (this.profile.port !== DEFAULT_RDP_PORT) {
+        this.portNumber = `${this.profile.port}`;
+      }
+      return;
+    }
+    const parsed: number = parseRdpPort(text);
+    if (parsed <= 0) {
+      return;
+    }
+    if (parsed !== this.profile.port) {
+      this.portNumber = this.profile.port === DEFAULT_RDP_PORT ? '' : `${this.profile.port}`;
+    }
   }
 
   private syncDriveRedirections(): void {
@@ -326,22 +345,34 @@ export struct ConnectionForm {
 
   build() {
     Column({ space: 18 }) {
-      Row() {
-        Text(i18n.get(this.appLanguage, 'connection_settings'))
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.colors.foreground)
+      // 主操作放在最上方：不用滚到底部就能连接
+      Row({ space: 14 }) {
+        Button(i18n.get(this.appLanguage, 'save_config'))
           .layoutWeight(1)
-
-        Button(i18n.get(this.appLanguage, 'new_connection'))
           .type(ButtonType.Normal)
-          .fontSize(14)
-          .height(38)
+          .height(52)
+          .fontSize(16)
+          .fontWeight(FontWeight.Medium)
           .backgroundColor(this.colors.muted)
-          .fontColor(this.colors.mutedForeground)
-          .borderRadius(10)
-          .padding({ left: 16, right: 16 })
-          .onClick(() => this.onNew())
+          .fontColor(this.colors.foreground)
+          .borderRadius(14)
+          .onClick(() => this.handleSave())
+
+        Button(i18n.get(this.appLanguage, 'connect_desktop'))
+          .layoutWeight(2)
+          .type(ButtonType.Normal)
+          .height(52)
+          .fontSize(17)
+          .fontWeight(FontWeight.Medium)
+          .backgroundColor(this.canConnect ? this.colors.primary : this.colors.muted)
+          .fontColor(this.canConnect ? this.colors.primaryForeground : this.colors.mutedForeground)
+          .borderRadius(14)
+          .enabled(this.canConnect)
+          .onClick(() => {
+            // 连接前同样提交待添加的目录，确保本次会话就能用上刚选择的文件夹
+            this.addNewDriveEntry();
+            this.onConnect();
+          })
       }
       .width('100%')
 
@@ -365,10 +396,11 @@ export struct ConnectionForm {
             this.onNameChange(v);
           });
 
+        // 唯一必填项：用淡靖蓝底色和边框标出，其它项保持素色
         TextInput({ placeholder: i18n.get(this.appLanguage, 'server_address_placeholder'), text: $$this.hostAddress })
-          .backgroundColor(this.colors.inputBackground)
+          .backgroundColor(this.colors.requiredInputBackground)
           .borderRadius(12)
-          .border({ width: 1, color: this.colors.inputBorder })
+          .border({ width: 1, color: this.colors.requiredInputBorder })
           .fontSize(16)
           .height(50)
           .padding({ left: 16, right: 16 })
@@ -407,7 +439,7 @@ export struct ConnectionForm {
             });
         }
 
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'username_placeholder'), text: $$this.userName })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'username_optional_placeholder'), text: $$this.userName })
           .backgroundColor(this.colors.inputBackground)
           .borderRadius(12)
           .border({ width: 1, color: this.colors.inputBorder })
@@ -456,7 +488,7 @@ export struct ConnectionForm {
         .width('100%')
         .padding({ left: 4, right: 4, top: 8, bottom: 8 })
 
-        TextInput({ placeholder: i18n.get(this.appLanguage, 'password_placeholder'), text: $$this.passwordValue })
+        TextInput({ placeholder: i18n.get(this.appLanguage, 'password_optional_placeholder'), text: $$this.passwordValue })
           .type(InputType.Password)
           .backgroundColor(this.rememberPassword ? this.colors.inputBackground : this.colors.muted)
           .borderRadius(12)
@@ -476,29 +508,6 @@ export struct ConnectionForm {
             this.passwordValue = v;
             this.onPasswordChange(v);
           });
-
-        if (this.profile.username.length === 0 || this.profile.password.length === 0) {
-          Row({ space: 10 }) {
-            Text('i')
-              .fontSize(14)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.colors.hintOrange)
-              .width(22)
-              .height(22)
-              .textAlign(TextAlign.Center)
-              .backgroundColor(this.colors.hintOrangeBg)
-              .borderRadius(11)
-            Text(i18n.get(this.appLanguage, 'empty_credentials_hint'))
-              .fontSize(14)
-              .fontColor(this.colors.hintOrange)
-              .lineHeight(20)
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .padding(14)
-          .backgroundColor(this.colors.hintOrangeBg)
-          .borderRadius(12)
-        }
       }
 
       Column({ space: 0 }) {
@@ -872,36 +881,6 @@ export struct ConnectionForm {
       .backgroundColor(this.colors.surfaceElevated)
       .border({ width: 1, color: this.colors.surfaceElevatedBorder })
       .borderRadius(16)
-
-      Row({ space: 14 }) {
-        Button(i18n.get(this.appLanguage, 'save_config'))
-          .layoutWeight(1)
-          .type(ButtonType.Normal)
-          .height(52)
-          .fontSize(16)
-          .fontWeight(FontWeight.Medium)
-          .backgroundColor(this.colors.muted)
-          .fontColor(this.colors.foreground)
-          .borderRadius(14)
-          .onClick(() => this.handleSave())
-
-        Button(i18n.get(this.appLanguage, 'connect_desktop'))
-          .layoutWeight(2)
-          .type(ButtonType.Normal)
-          .height(52)
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .backgroundColor(this.canConnect ? this.colors.primary : this.colors.muted)
-          .fontColor(this.canConnect ? this.colors.primaryForeground : this.colors.mutedForeground)
-          .borderRadius(14)
-          .enabled(this.canConnect)
-          .onClick(() => {
-            // 连接前同样提交待添加的目录，确保本次会话就能用上刚选择的文件夹
-            this.addNewDriveEntry();
-            this.onConnect();
-          })
-      }
-      .width('100%')
     }
     .width('100%')
   }

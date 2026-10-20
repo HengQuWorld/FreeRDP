@@ -1,5 +1,5 @@
 import { ConnectionProfile, createEmptyProfile, cloneProfile, DriveRedirection,
-  deriveDriveName, normalizeDriveRedirections } from '../model/ConnectionProfile';
+  deriveDriveName, normalizeDriveRedirections, parseRdpPort, DEFAULT_RDP_PORT } from '../model/ConnectionProfile';
 import { BookmarkService } from '../service/BookmarkService';
 import { IdGenerator } from '../utils/IdGenerator';
 import { i18n } from '../utils/I18n';
@@ -81,9 +81,13 @@ export class HomeViewModel {
   }
 
   updatePort(value: string): void {
-    const parsed: number = Number(value);
+    // 留空表示用默认端口；输入到一半或超出 1..65535 时保留上一个有效端口，不打断输入
+    const port: number = value.trim().length === 0 ? DEFAULT_RDP_PORT : parseRdpPort(value);
+    if (port <= 0 || port === this.profile.port) {
+      return;
+    }
     const nextProfile: ConnectionProfile = this.copyProfile(this.profile);
-    nextProfile.port = Number.isFinite(parsed) && parsed > 0 ? parsed : 3389;
+    nextProfile.port = port;
     this.profile = nextProfile;
     this.persistDraft();
   }
@@ -255,8 +259,9 @@ export class HomeViewModel {
     this.lastMessage = `${i18n.get(i18n.currentLocale(), 'loaded_profile_prefix')} ${profile.name}`;
   }
 
+  // 主机地址是唯一必填项：账号、密码、端口、分辨率都有默认值或可留空。
   get canConnect(): boolean {
-    return this.profile.host.trim().length > 0 && this.profile.username.trim().length > 0;
+    return this.profile.host.trim().length > 0;
   }
 
   async saveCurrentProfile(): Promise<void> {

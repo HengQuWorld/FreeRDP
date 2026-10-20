@@ -17,6 +17,9 @@ export interface ThemeColors {
   tagText: string;
   inputBackground: string;
   inputBorder: string;
+  // 唯一必填字段（服务器地址）的强调色
+  requiredInputBackground: string;
+  requiredInputBorder: string;
   connectedGreen: string;
   connectingAmber: string;
   errorRed: string;
@@ -70,6 +73,8 @@ export const LightColors: ThemeColors = {
   tagText: '#2c5f63',
   inputBackground: '#fafaf8',
   inputBorder: '#d9d7d2',
+  requiredInputBackground: '#eef1fa',
+  requiredInputBorder: '#a8b4dd',
   connectedGreen: '#22a06b',
   connectingAmber: '#b0882c',
   errorRed: '#dc2626',
@@ -123,6 +128,8 @@ export const DarkColors: ThemeColors = {
   tagText: '#5fb8b8',
   inputBackground: '#0d1619',
   inputBorder: '#1c2a2e',
+  requiredInputBackground: 'rgba(129,140,248,0.12)',
+  requiredInputBorder: 'rgba(129,140,248,0.42)',
   connectedGreen: '#34d399',
   connectingAmber: '#fbbf24',
   errorRed: '#f87171',

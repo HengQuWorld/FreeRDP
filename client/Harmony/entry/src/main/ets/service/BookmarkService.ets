@@ -1,6 +1,6 @@
 import dataPreferences from '@ohos.data.preferences';
 import common from '@ohos.app.ability.common';
-import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, DriveRedirection, normalizeDriveRedirections, copyDriveRedirections } from '../model/ConnectionProfile';
+import { ConnectionProfile, cloneProfile, createEmptyProfile, DEFAULT_DESKTOP_WIDTH, DEFAULT_DESKTOP_HEIGHT, DEFAULT_RDP_PORT, DriveRedirection, normalizeDriveRedirections, copyDriveRedirections } from '../model/ConnectionProfile';
 import { logger, LogTags } from '../utils/Logger';
 
 export class BookmarkService {
@@ -244,7 +244,7 @@ export class BookmarkService {
       id: this.decode(parts[0]),
       name: this.decode(parts[1]),
       host: this.decode(parts[2]),
-      port: Number.isFinite(portNumber) && portNumber > 0 ? portNumber : 3389,
+      port: Number.isFinite(portNumber) && portNumber > 0 ? portNumber : DEFAULT_RDP_PORT,
       clientHostname: hasClientHostname ? this.decode(parts[clientHostnameIndex]) : '',
       username: this.decode(parts[usernameIndex]),
       password,

@@ -489,7 +489,7 @@ struct Index {
 
     const profile = this.homeViewModel.profile;
     if (!this.homeViewModel.canConnect) {
-      const msg = i18n.get(this.appLanguage, 'please_fill_host_and_user');
+      const msg = i18n.get(this.appLanguage, 'please_fill_host');
       this.homeViewModel.lastMessage = msg;
       this.showToast(msg, true);
       return;
@@ -1103,7 +1103,6 @@ struct Index {
             onUpdateDriveRedirection: (index: number, name: string, path: string) =>
               this.homeViewModel.updateDriveRedirection(index, name, path),
             onRemoveDriveRedirection: (index: number) => this.homeViewModel.removeDriveRedirection(index),
-            onNew: () => { this.homeViewModel.createNewProfile(); this.selectedConnId = ''; },
             onSave: () => { 
               void (async () => {
                 const oldMessage = this.homeViewModel.lastMessage;
