@@ -1,6 +1,5 @@
 import { ConnectionForm } from '../components/ConnectionForm';
 import { BookmarkList } from '../components/BookmarkList';
-import { ThemeToggle } from '../components/ThemeToggle';
 import { LanguageToggle } from '../components/LanguageToggle';
 import { ReviewPromptDialog } from '../components/ReviewPromptDialog';
 import { HomeViewModel } from '../viewmodel/HomeViewModel';
@@ -674,7 +673,6 @@ struct Index {
 
         Row({ space: this.isPhoneLayout() ? 6 : 10 }) {
           LanguageToggle()
-          ThemeToggle()
 
           if (!this.isPhoneLayout()) {
             Text(`v${BUILD_VERSION}`)

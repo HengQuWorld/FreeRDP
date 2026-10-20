@@ -1,3 +1,5 @@
+import { ConfigurationConstant } from '@kit.AbilityKit';
+
 export interface ThemeColors {
   background: string;
   foreground: string;
@@ -164,24 +166,24 @@ export const DarkColors: ThemeColors = {
   toastInfoText: '#93c5fd'
 };
 
-const THEME_KEY: string = '__app_theme_mode__';
+export const DARK_MODE_STORAGE_KEY: string = '__app_is_dark_mode__';
 
-export enum ThemeMode {
-  Light = 'light',
-  Dark = 'dark'
+export function isDarkColorMode(colorMode: ConfigurationConstant.ColorMode | undefined): boolean {
+  return colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
 }
 
 export function getThemeColors(isDark: boolean): ThemeColors {
   return isDark ? DarkColors : LightColors;
 }
 
-export function getStoredThemeMode(): ThemeMode {
-  try {
-    const stored: string | undefined = AppStorage.get<string>(THEME_KEY);
-    if (stored === ThemeMode.Dark) {
-      return ThemeMode.Dark;
-    }
-  } catch (_e) {
-  }
-  return ThemeMode.Light;
+/**
+ * Mirrors the system dark/light setting into AppStorage so every page reacts
+ * to it. The application itself keeps the default COLOR_MODE_NOT_SET, which is
+ * what makes the system window decoration (title bar and its buttons) and the
+ * resources in resources/dark follow the system for us.
+ */
+export function syncSystemColorMode(colorMode: ConfigurationConstant.ColorMode | undefined): boolean {
+  const isDark: boolean = isDarkColorMode(colorMode);
+  AppStorage.setOrCreate<boolean>(DARK_MODE_STORAGE_KEY, isDark);
+  return isDark;
 }

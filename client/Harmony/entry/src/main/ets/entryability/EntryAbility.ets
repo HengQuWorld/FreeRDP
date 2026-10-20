@@ -1,12 +1,13 @@
-import { AbilityConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, Configuration, UIAbility, Want } from '@kit.AbilityKit';
 import { window } from '@kit.ArkUI';
 import { sessionWindowManager } from '../service/SessionWindowManager';
-import { ThemeMode, getStoredThemeMode } from '../utils/ThemeConstants';
+import { DARK_MODE_STORAGE_KEY, DarkColors, LightColors, syncSystemColorMode } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
 import { logger, LogTags } from '../utils/Logger';
 
 interface WindowLike {
   setWindowTitle?: (t: string) => void;
+  setWindowBackgroundColor?: (color: string) => void;
 }
 
 interface WindowStageLike {
@@ -19,10 +20,13 @@ export default class EntryAbility extends UIAbility {
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     logger.info(LogTags.ENTRY_ABILITY, 'EntryAbility onCreate');
-    
-    PersistentStorage.persistProp('__app_theme_mode__', 'light');
-    const storedTheme: ThemeMode = getStoredThemeMode();
-    AppStorage.setOrCreate('__app_is_dark_mode__', storedTheme === ThemeMode.Dark);
+
+    // The ability keeps the default COLOR_MODE_NOT_SET, so the system drives
+    // both the theme resources and the window decoration. Only the rendering
+    // state has to learn which way the system went.
+    const isDark: boolean = syncSystemColorMode(this.context.config.colorMode);
+    logger.info(LogTags.ENTRY_ABILITY,
+      `System color mode: ${this.context.config.colorMode}, dark=${isDark}`);
 
     AppStorage.setOrCreate('__app_context__', this.context);
     i18n.init(this.context);
@@ -49,16 +53,6 @@ export default class EntryAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     logger.info(LogTags.ENTRY_ABILITY, 'onWindowStageCreate');
-    
-    windowStage.loadContent('pages/Index', (error: Error | undefined) => {
-      const serializedError: string | undefined = JSON.stringify(error);
-      if (error !== undefined && serializedError !== undefined &&
-          serializedError.indexOf('"code":0') < 0) {
-        logger.error(LogTags.ENTRY_ABILITY, `loadContent failed: ${serializedError}`);
-      } else {
-        logger.info(LogTags.ENTRY_ABILITY, 'loadContent succeeded');
-      }
-    });
 
     try {
       const ws = windowStage as WindowStageLike;
@@ -70,6 +64,40 @@ export default class EntryAbility extends UIAbility {
       }
     } catch (e) {
       logger.error(LogTags.ENTRY_ABILITY, 'Failed to get main window', e);
+    }
+
+    windowStage.loadContent('pages/Index', (error: Error | undefined) => {
+      const serializedError: string | undefined = JSON.stringify(error);
+      if (error !== undefined && serializedError !== undefined &&
+          serializedError.indexOf('"code":0') < 0) {
+        logger.error(LogTags.ENTRY_ABILITY, `loadContent failed: ${serializedError}`);
+      } else {
+        logger.info(LogTags.ENTRY_ABILITY, 'loadContent succeeded');
+      }
+      this.applyWindowBackground();
+    });
+  }
+
+  onConfigurationUpdate(newConfig: Configuration): void {
+    const isDark: boolean = syncSystemColorMode(newConfig.colorMode);
+    logger.info(LogTags.ENTRY_ABILITY,
+      `System color mode changed: ${newConfig.colorMode}, dark=${isDark}`);
+    this.applyWindowBackground();
+  }
+
+  /**
+   * Paints the window surface itself in the current theme color, so the frame
+   * behind the page never flashes white while content renders. The window
+   * decoration is drawn by the system and cannot be recolored from a
+   * third-party app; it follows the system dark/light setting on its own.
+   */
+  private applyWindowBackground(): void {
+    const dark: boolean = AppStorage.get<boolean>(DARK_MODE_STORAGE_KEY) === true;
+    const background: string = (dark ? DarkColors : LightColors).background;
+    try {
+      (this.mainWindow as WindowLike)?.setWindowBackgroundColor?.(background);
+    } catch (e) {
+      logger.error(LogTags.ENTRY_ABILITY, 'Failed to set window background', e);
     }
   }
 

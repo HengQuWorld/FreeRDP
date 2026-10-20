@@ -1,10 +1,12 @@
 import { i18n } from '../utils/I18n';
+import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { LanguagePicker } from './LanguagePicker';
 
 @Component
 export struct LanguageToggle {
   @StorageLink('__app_language__') appLanguage: string = 'system';
-  @StorageLink('__app_is_dark_mode__') isDark: boolean = false;
+  @StorageLink('__app_is_dark_mode__') @Watch('onThemeChanged') isDark: boolean = false;
+  @State colors: ThemeColors = LightColors;
 
   private dialogController: CustomDialogController = new CustomDialogController({
     builder: LanguagePicker({
@@ -17,6 +19,14 @@ export struct LanguageToggle {
     customStyle: true
   });
 
+  onThemeChanged(): void {
+    this.colors = this.isDark ? DarkColors : LightColors;
+  }
+
+  aboutToAppear(): void {
+    this.colors = this.isDark ? DarkColors : LightColors;
+  }
+
   build() {
     Button(this.displayLabel())
       .type(ButtonType.Circle)
@@ -24,8 +34,8 @@ export struct LanguageToggle {
       .height(36)
       .fontSize(11)
       .fontWeight(FontWeight.Bold)
-      .fontColor(this.isDark ? '#5fb8b8' : '#2c5f63')
-      .backgroundColor(this.isDark ? 'rgba(95,184,184,0.12)' : 'rgba(44,95,99,0.08)')
+      .fontColor(this.colors.accentForeground)
+      .backgroundColor(this.colors.accent)
       .onClick(() => {
         this.dialogController.open();
       })

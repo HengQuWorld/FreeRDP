@@ -1,8 +1,10 @@
 import UIAbility from '@ohos.app.ability.UIAbility';
 import AbilityConstant from '@ohos.app.ability.AbilityConstant';
 import Want from '@ohos.app.ability.Want';
+import { Configuration } from '@ohos.app.ability.Configuration';
 import window from '@ohos.window';
 import { SessionRecord, sessionManager } from '../service/SessionManager';
+import { DARK_MODE_STORAGE_KEY, DarkColors, LightColors, syncSystemColorMode } from '../utils/ThemeConstants';
 import { logger, LogTags } from '../utils/Logger';
 
 interface WantLike {
@@ -18,6 +20,7 @@ interface UIAbilityContextWithWant {
 interface WindowLike {
   setWindowTitle?: (t: string) => void;
   setWindowDecorVisible?: (visible: boolean) => void;
+  setWindowBackgroundColor?: (color: string) => void;
 }
 
 interface WindowStageLike {
@@ -38,10 +41,13 @@ export const DEFAULT_SESSION_LAUNCH_PARAMS: SessionLaunchParams = {
 export default class SessionAbility extends UIAbility {
   private sessionId: number = 0;
   private sessionTitle: string = '远程桌面';
+  private mainWindow: Object | null = null;
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     logger.info(LogTags.SESSION_ABILITY, 'SessionAbility onCreate');
-    
+
+    syncSystemColorMode(this.context.config.colorMode);
+
     try {
       const params = want?.parameters ?? {};
       this.sessionId = Number(
@@ -70,13 +76,19 @@ export default class SessionAbility extends UIAbility {
     logger.info(LogTags.SESSION_ABILITY, 'onWindowStageCreate');
     
     try {
-      windowStage.loadContent('pages/Session');
+      windowStage.loadContent('pages/Session', (error: Error | undefined) => {
+        if (error !== undefined) {
+          logger.error(LogTags.SESSION_ABILITY, `loadContent failed: ${JSON.stringify(error)}`);
+        }
+        this.applyWindowBackground();
+      });
       logger.info(LogTags.SESSION_ABILITY, 'loadContent called for Session page');
 
       const ws = windowStage as WindowStageLike;
       const mainWin = ws.getMainWindowSync?.();
 
       const apply = (win: Object): void => {
+        this.mainWindow = win;
         try {
           const w = win as WindowLike;
           w.setWindowTitle?.(this.sessionTitle);
@@ -98,6 +110,23 @@ export default class SessionAbility extends UIAbility {
       }
     } catch (e) {
       logger.error(LogTags.SESSION_ABILITY, 'Failed in onWindowStageCreate', e);
+    }
+  }
+
+  onConfigurationUpdate(newConfig: Configuration): void {
+    const isDark: boolean = syncSystemColorMode(newConfig.colorMode);
+    logger.info(LogTags.SESSION_ABILITY,
+      `System color mode changed: ${newConfig.colorMode}, dark=${isDark}`);
+    this.applyWindowBackground();
+  }
+
+  private applyWindowBackground(): void {
+    const dark: boolean = AppStorage.get<boolean>(DARK_MODE_STORAGE_KEY) === true;
+    const background: string = (dark ? DarkColors : LightColors).background;
+    try {
+      (this.mainWindow as WindowLike)?.setWindowBackgroundColor?.(background);
+    } catch (e) {
+      logger.error(LogTags.SESSION_ABILITY, 'Failed to set window background', e);
     }
   }
 
