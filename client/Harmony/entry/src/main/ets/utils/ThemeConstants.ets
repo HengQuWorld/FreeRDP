@@ -172,10 +172,6 @@ export function isDarkColorMode(colorMode: ConfigurationConstant.ColorMode | und
   return colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
 }
 
-export function getThemeColors(isDark: boolean): ThemeColors {
-  return isDark ? DarkColors : LightColors;
-}
-
 /**
  * Mirrors the system dark/light setting into AppStorage so every page reacts
  * to it. The application itself keeps the default COLOR_MODE_NOT_SET, which is

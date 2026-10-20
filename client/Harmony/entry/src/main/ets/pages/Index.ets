@@ -1,5 +1,4 @@
 import { ConnectionForm } from '../components/ConnectionForm';
-import { BookmarkList } from '../components/BookmarkList';
 import { LanguageToggle } from '../components/LanguageToggle';
 import { ReviewPromptDialog } from '../components/ReviewPromptDialog';
 import { HomeViewModel } from '../viewmodel/HomeViewModel';
@@ -102,10 +101,6 @@ struct Index {
     return this.pageWidth >= 840 && this.pageWidth < 1440;
   }
 
-  private layoutSpacing(): number {
-    return this.isPhoneLayout() ? 16 : 24;
-  }
-
   private horizontalPadding(): number {
     if (this.isPhoneLayout()) {
       return 16;
@@ -114,13 +109,6 @@ struct Index {
       return 24;
     }
     return 32;
-  }
-
-  private contentMaxWidth(): number {
-    if (this.isPhoneLayout()) {
-      return 960;
-    }
-    return 800;
   }
 
   reviewDialogController: CustomDialogController = new CustomDialogController({
@@ -590,15 +578,6 @@ struct Index {
         this.showToast(this.homeViewModel.lastMessage);
       }
     }
-  }
-
-  private getSelectedConnection(): ConnectionProfile | null {
-    if (!this.selectedConnId) return null;
-    return this.homeViewModel.bookmarks.find((it: ConnectionProfile) => it.id === this.selectedConnId) ?? null;
-  }
-
-  private formatLastUsed(ts: number | undefined): string {
-    return i18n.getFormattedRelativeTime(this.appLanguage, ts);
   }
 
   build() {

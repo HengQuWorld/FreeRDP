@@ -112,48 +112,6 @@ class I18nManager {
     return 'system';
   }
 
-  resolvedLocale(): string {
-    return this.resolveLocale(this.currentLocale());
-  }
-
-  getFormattedRelativeTime(locale: string, ts: number | undefined): string {
-    if (!ts || ts <= 0) {
-      return this.get(locale, 'never_used');
-    }
-    const now = Date.now();
-    const diff = now - ts;
-    if (diff < 60000) {
-      return this.get(locale, 'just_now');
-    }
-    if (diff < 3600000) {
-      return `${Math.floor(diff / 60000)}${this.get(locale, 'minutes_ago')}`;
-    }
-    if (diff < 86400000) {
-      return `${Math.floor(diff / 3600000)}${this.get(locale, 'hours_ago')}`;
-    }
-    if (diff < 604800000) {
-      return `${Math.floor(diff / 86400000)}${this.get(locale, 'days_ago')}`;
-    }
-    const d = new Date(ts);
-    return `${d.getMonth() + 1}/${d.getDate()}`;
-  }
-
-  getStageLabel(locale: string, stage: number): string {
-    if (stage === 3) {
-      return this.get(locale, 'stage_connected');
-    }
-    if (stage === 2) {
-      return this.get(locale, 'stage_connecting');
-    }
-    if (stage === 4) {
-      return this.get(locale, 'stage_disconnected');
-    }
-    if (stage === 5) {
-      return this.get(locale, 'stage_error');
-    }
-    return this.get(locale, 'stage_idle');
-  }
-
   getSessionCountLabel(locale: string, count: number): string {
     const resolved: string = this.resolveLocale(locale);
     if (resolved === 'en-US') {

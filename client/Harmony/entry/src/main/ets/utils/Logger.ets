@@ -7,17 +7,11 @@ export enum LogLevel {
 
 export interface LogTagsType {
   SESSION_MANAGER: string;
-  SESSION_BACKEND: string;
-  SESSION_BRIDGE: string;
-  SESSION_VIEWMODEL: string;
   HOME_VIEWMODEL: string;
   CONNECTION_FORM: string;
-  AUTH_DIALOG: string;
-  CERT_DIALOG: string;
   ENTRY_ABILITY: string;
   SESSION_ABILITY: string;
   BOOKMARK_SERVICE: string;
-  KEYBOARD_HELPER: string;
   APP_REVIEW: string;
 }
 
@@ -100,16 +94,10 @@ export const logger: Logger = Logger.getInstance();
 
 export const LogTags: LogTagsType = {
   SESSION_MANAGER: 'SessionManager',
-  SESSION_BACKEND: 'SessionBackend',
-  SESSION_BRIDGE: 'SessionBridge',
-  SESSION_VIEWMODEL: 'SessionViewModel',
   HOME_VIEWMODEL: 'HomeViewModel',
   CONNECTION_FORM: 'ConnectionForm',
-  AUTH_DIALOG: 'AuthDialog',
-  CERT_DIALOG: 'CertDialog',
   ENTRY_ABILITY: 'EntryAbility',
   SESSION_ABILITY: 'SessionAbility',
   BOOKMARK_SERVICE: 'BookmarkService',
-  KEYBOARD_HELPER: 'KeyboardHelper',
   APP_REVIEW: 'AppReview'
 };

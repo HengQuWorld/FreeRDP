@@ -188,10 +188,6 @@ export struct RemoteDesktopSurface {
     };
   }
 
-  private getRenderMetrics(): RenderMetrics {
-    return this.getTransformedRect();
-  }
-
   private toBaseViewerPoint(x: number, y: number): RemotePoint {
     if (this.zoomScale <= 1.0) {
       return {
