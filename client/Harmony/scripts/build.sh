@@ -117,6 +117,40 @@ freerdp_cache_dir() {
   printf '%s/cache/build/freerdp\n' "${repo_root}"
 }
 
+# Two pieces of state outside the persistent cache record that FreeRDP was
+# built and installed into it: the ExternalProject stamps in the CMake build
+# tree, and hvigor's CMake configure fingerprint. Both have to be dropped when
+# the cache goes, otherwise the next build links the bridge against headers
+# that no longer exist ('winpr/config.h' file not found) instead of rebuilding.
+clean_native_build_state() {
+  local entry_cxx="${PROJECT_DIR}/entry/.cxx"
+
+  if [[ ! -d "${entry_cxx}" ]]; then
+    return 0
+  fi
+
+  local stamp
+  while IFS= read -r stamp; do
+    [[ -n "${stamp}" ]] || continue
+    rm -f "${stamp}"
+    log "Discarded stale FreeRDP build stamp: ${stamp}"
+  done < <(
+    find "${entry_cxx}" -path '*/freerdp-prefix/src/freerdp-stamp/*' \
+      \( -name freerdp-build -o -name freerdp-install -o -name freerdp-done \) \
+      -type f 2>/dev/null || true
+  )
+
+  # hvigor only re-runs the CMake configure when one of the files it
+  # fingerprints changes, and the external cache is not in that list. Without
+  # a reconfigure the existing build graph keeps no recipe for FreeRDP at all.
+  local fingerprint
+  while IFS= read -r fingerprint; do
+    [[ -n "${fingerprint}" ]] || continue
+    rm -f "${fingerprint}"
+    log "Discarded CMake configure fingerprint: ${fingerprint}"
+  done < <(find "${entry_cxx}" -name configure_fingerprint.json -type f 2>/dev/null || true)
+}
+
 clean_freerdp_cache() {
   local cache_dir
   cache_dir="$(freerdp_cache_dir)"
@@ -125,6 +159,8 @@ clean_freerdp_cache() {
     log "Removing FreeRDP persistent cache: ${cache_dir}"
     rm -rf "${cache_dir}"
   fi
+
+  clean_native_build_state
 }
 
 has_freerdp_source_changes() {

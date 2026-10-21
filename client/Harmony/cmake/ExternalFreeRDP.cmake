@@ -22,6 +22,12 @@ set(FREERDP_PERSISTENT_CACHE_DIR
     "${CMAKE_CURRENT_LIST_DIR}/../../../cache/build/freerdp/${OHOS_ARCH}/${FREERDP_BUILD_TYPE_KEY}")
 set(FREERDP_INSTALL_DIR "${FREERDP_PERSISTENT_CACHE_DIR}/install")
 
+# ExternalProject keeps its stamps in the build tree, which survives when the
+# persistent cache is deleted (by --clean, or by hand). Pin the prefix so the
+# stamps can be found and discarded below.
+set(FREERDP_EP_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/freerdp-prefix")
+set(FREERDP_STAMP_DIR "${FREERDP_EP_PREFIX}/src/freerdp-stamp")
+
 # With verbose assertions every WINPR_ASSERT becomes a logged, formatted check,
 # and the core library announces the option in a WARN banner on the first
 # context. That is worth having while debugging and is pure noise, plus a
@@ -34,7 +40,9 @@ else()
 endif()
 
 set(FREERDP_CACHE_HIT OFF)
-if(EXISTS "${FREERDP_INSTALL_DIR}/lib/libfreerdp3.a" AND EXISTS "${FREERDP_INSTALL_DIR}/lib/libwinpr3.a")
+if(EXISTS "${FREERDP_INSTALL_DIR}/lib/libfreerdp3.a"
+   AND EXISTS "${FREERDP_INSTALL_DIR}/lib/libwinpr3.a"
+   AND EXISTS "${FREERDP_INSTALL_DIR}/include/winpr3/winpr/config.h")
   if(NOT "$ENV{FORCE_REBUILD_FREERDP}" STREQUAL "1")
     message(STATUS "ExternalFreeRDP: Cache hit at ${FREERDP_INSTALL_DIR}, skipping build")
     set(FREERDP_CACHE_HIT ON)
@@ -42,6 +50,17 @@ if(EXISTS "${FREERDP_INSTALL_DIR}/lib/libfreerdp3.a" AND EXISTS "${FREERDP_INSTA
 endif()
 
 if(NOT FREERDP_CACHE_HIT)
+  # A stamp claiming 'built' and 'installed' is a lie once the install tree it
+  # installed into is gone, and ninja trusts stamps over the filesystem. Drop
+  # them so the steps below run again; the existing object files in the build
+  # tree still make this an incremental rebuild.
+  foreach(_freerdp_stamp freerdp-build freerdp-install freerdp-done)
+    if(EXISTS "${FREERDP_STAMP_DIR}/${_freerdp_stamp}")
+      message(STATUS "ExternalFreeRDP: discarding stale stamp ${_freerdp_stamp}")
+      file(REMOVE "${FREERDP_STAMP_DIR}/${_freerdp_stamp}")
+    endif()
+  endforeach()
+
   message(STATUS "ExternalFreeRDP: Building FreeRDP from source for ${OHOS_ARCH} (${FREERDP_BUILD_TYPE_KEY}, verbose asserts ${FREERDP_VERBOSE_WINPR_ASSERT})")
 
   set(FREERDP_CMAKE_ARGS
@@ -89,6 +108,7 @@ if(NOT FREERDP_CACHE_HIT)
   if(TARGET openssl)
     ExternalProject_Add(
       freerdp
+      PREFIX ${FREERDP_EP_PREFIX}
       SOURCE_DIR ${FREERDP_SOURCE_DIR}
       CMAKE_COMMAND ${CMAKE_COMMAND}
       CMAKE_ARGS ${FREERDP_CMAKE_ARGS}
@@ -101,6 +121,7 @@ if(NOT FREERDP_CACHE_HIT)
   else()
     ExternalProject_Add(
       freerdp
+      PREFIX ${FREERDP_EP_PREFIX}
       SOURCE_DIR ${FREERDP_SOURCE_DIR}
       CMAKE_COMMAND ${CMAKE_COMMAND}
       CMAKE_ARGS ${FREERDP_CMAKE_ARGS}
