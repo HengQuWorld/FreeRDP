@@ -19,6 +19,12 @@ const NATIVE_SURFACE_ENABLED: boolean = true;
 // server. Only the give-up case is new; the count is unchanged.
 const kMaxDesktopResizeRetries: number = 6;
 
+// The first retry waits 1.2 s, which is enough for a server that is still
+// laying the session out; later attempts back off so a refused layout does not
+// keep rebuilding the remote desktop.
+const kDesktopResizeRetryBaseDelayMs: number = 1200;
+const kDesktopResizeRetryMaxDelayMs: number = 6000;
+
 const PTR_FLAGS_BUTTON1: number = 0x1000;
 const PTR_FLAGS_BUTTON2: number = 0x2000;
 const PTR_FLAGS_BUTTON3: number = 0x4000;
@@ -68,8 +74,8 @@ export struct RemoteDesktopSurface {
     (_codepoint: number, _down: boolean): void => {};
   onScaleChange: (scale: number) => void = (_scale: number): void => {};
   onSurfaceSizeChange: (width: number, height: number) => void = (_width: number, _height: number): void => {};
-  onRequestDesktopSize: (width: number, height: number) => void =
-    (_width: number, _height: number): void => {};
+  onRequestDesktopSize: (width: number, height: number, deviceScalePercent: number) => void =
+    (_width: number, _height: number, _deviceScalePercent: number): void => {};
   // Called once per viewport when the server would not take the fitted size, so
   // the session can say why the picture did not fill the window.
   onDesktopResizeUnsupported: () => void = (): void => {};
@@ -92,6 +98,15 @@ export struct RemoteDesktopSurface {
   private desktopResizeTimer: number = -1;
   private desktopResizeRetryTimer: number = -1;
   private desktopResizeRetries: number = 0;
+  // Delay before the next attempt. Every layout that reaches the server makes
+  // Windows rebuild the desktop, so a fixed 1.2 s cadence kept a refused layout
+  // hammering the shell six times in seven seconds; the delay now grows with
+  // each attempt so a slow server gets room and a refusing one is not spammed.
+  private desktopResizeRetryDelayMs: number = kDesktopResizeRetryBaseDelayMs;
+  // The view's px-per-vp ratio in percent (180 on a 1.8x display). Sent with
+  // the layout so the server draws the desktop at the same logical size the
+  // viewport has instead of at 100%.
+  private deviceScalePercent: number = 100;
   // The "server kept its own size" notice belongs to one viewport state; it is
   // re-armed when the view or the session changes.
   private desktopResizeUnsupportedNotified: boolean = false;
@@ -157,22 +172,59 @@ export struct RemoteDesktopSurface {
     return 'rdp_soft_input_' + this.sessionId;
   }
 
+  // A surface placed on a fractional device pixel is resampled by the
+  // compositor: text turns soft and the last row of pixels smears. Layout
+  // offsets are therefore rounded to whole device pixels.
+  private snapToDevicePixels(valueVp: number): number {
+    const pixelsPerVp: number = this.getUIContext().vp2px(1);
+    if (!(pixelsPerVp > 0)) {
+      return valueVp;
+    }
+    return Math.round(valueVp * pixelsPerVp) / pixelsPerVp;
+  }
+
   private getBaseFitMetrics(): RenderMetrics {
     const vw = this.surfaceWidth > 0 ? this.surfaceWidth : this.snapshot.width;
     const vh = this.surfaceHeight > 0 ? this.surfaceHeight : this.snapshot.height;
     if (vw <= 0 || vh <= 0 || this.snapshot.width <= 0 || this.snapshot.height <= 0) {
       return { width: Math.max(1, vw), height: Math.max(1, vh), offsetX: 0, offsetY: 0 };
     }
+    if (this.adaptiveDesktop) {
+      // Once the server has applied the layout, size the surface to the desktop
+      // in vp so one buffer pixel maps to one screen pixel. While the sizes
+      // disagree the request is rounded to an even width, so a viewport of an
+      // odd number of pixels is off by one: drawing that buffer across the
+      // viewport scales it by ~0.07%, which shows up as a sub-pixel smear along
+      // the bottom and right edges - the slight misfit seen under the taskbar.
+      // Snapping is safe because vp2px(px2vp(n)) == n, so it asks the server for
+      // exactly the size it already reported.
+      if (this.isDesktopSettled()) {
+        const snappedW = this.getUIContext().px2vp(this.snapshot.width);
+        const snappedH = this.getUIContext().px2vp(this.snapshot.height);
+        return {
+          width: snappedW,
+          height: snappedH,
+          offsetX: this.snapToDevicePixels((vw - snappedW) / 2),
+          offsetY: this.snapToDevicePixels((vh - snappedH) / 2)
+        };
+      }
+      // While the server has not applied the new layout yet, keep filling the
+      // viewport. Auto-fit is exactly the promise that the desktop is laid out
+      // at this viewport, so there is no aspect ratio to preserve; letterboxing
+      // drew a black band across the bottom of the desktop - over the lower edge
+      // of the Start menu and the taskbar - for the seconds the server needs.
+      return { width: vw, height: vh, offsetX: 0, offsetY: 0 };
+    }
     const vr = vw / vh;
     const sr = this.snapshot.width / this.snapshot.height;
     if (vr > sr) {
       const h = vh;
       const w = h * sr;
-      return { width: w, height: h, offsetX: (vw - w) / 2, offsetY: 0 };
+      return { width: w, height: h, offsetX: this.snapToDevicePixels((vw - w) / 2), offsetY: 0 };
     }
     const w = vw;
     const h = w / sr;
-    return { width: w, height: h, offsetX: 0, offsetY: (vh - h) / 2 };
+    return { width: w, height: h, offsetX: 0, offsetY: this.snapToDevicePixels((vh - h) / 2) };
   }
 
   private getTransformedRect(): RenderMetrics {
@@ -204,57 +256,38 @@ export struct RemoteDesktopSurface {
     };
   }
 
+  // The pointer has to be mapped through exactly the rect the picture is drawn
+  // into. This used to repeat the letterbox arithmetic by hand, so any change
+  // to that layout silently shifted every click. Both modes now come from the
+  // same metrics.
   private toRemotePoint(localX: number, localY: number): RemotePoint {
-    const vw = this.surfaceWidth > 0 ? this.surfaceWidth : this.snapshot.width;
-    const vh = this.surfaceHeight > 0 ? this.surfaceHeight : this.snapshot.height;
-
-    if (vw <= 0 || vh <= 0 || this.snapshot.width <= 0 || this.snapshot.height <= 0) {
+    if (this.snapshot.width <= 0 || this.snapshot.height <= 0) {
       return { x: 0, y: 0 };
     }
-
-    const base = this.toBaseViewerPoint(localX, localY);
-    const x = base.x;
-    const y = base.y;
-
-    const frameW = vw;
-    const frameH = vh;
-    const sourceW = this.snapshot.width;
-    const sourceH = this.snapshot.height;
-
-    const scale = Math.min(frameW / sourceW, frameH / sourceH);
-    const contentW = sourceW * scale;
-    const contentH = sourceH * scale;
-    const offsetX = (frameW - contentW) / 2;
-    const offsetY = (frameH - contentH) / 2;
-
-    const rx = Math.max(0, Math.min(sourceW - 1, Math.floor((x - offsetX) / scale)));
-    const ry = Math.max(0, Math.min(sourceH - 1, Math.floor((y - offsetY) / scale)));
-
-    return { x: rx, y: ry };
+    const base = this.getBaseFitMetrics();
+    if (base.width <= 0 || base.height <= 0) {
+      return { x: 0, y: 0 };
+    }
+    const point = this.toBaseViewerPoint(localX, localY);
+    const rx = Math.floor((point.x - base.offsetX) * this.snapshot.width / base.width);
+    const ry = Math.floor((point.y - base.offsetY) * this.snapshot.height / base.height);
+    return {
+      x: Math.max(0, Math.min(this.snapshot.width - 1, rx)),
+      y: Math.max(0, Math.min(this.snapshot.height - 1, ry))
+    };
   }
 
   private isLocalWithinContent(localX: number, localY: number): boolean {
     if (this.snapshot.width <= 0 || this.snapshot.height <= 0) return true;
     if (this.surfaceWidth <= 0 || this.surfaceHeight <= 0) return true;
 
-    const base = this.toBaseViewerPoint(localX, localY);
-    const x = base.x;
-    const y = base.y;
+    const base = this.getBaseFitMetrics();
+    if (base.width <= 0 || base.height <= 0) return true;
 
-    const frameW = this.surfaceWidth;
-    const frameH = this.surfaceHeight;
-    const sourceW = this.snapshot.width;
-    const sourceH = this.snapshot.height;
-
-    const scale = Math.min(frameW / sourceW, frameH / sourceH);
-    const contentW = sourceW * scale;
-    const contentH = sourceH * scale;
-    const offsetX = (frameW - contentW) / 2;
-    const offsetY = (frameH - contentH) / 2;
-
-    const rawX = (x - offsetX) / scale;
-    const rawY = (y - offsetY) / scale;
-    return rawX >= 0 && rawX < sourceW && rawY >= 0 && rawY < sourceH;
+    const point = this.toBaseViewerPoint(localX, localY);
+    const rawX = (point.x - base.offsetX) / base.width * this.snapshot.width;
+    const rawY = (point.y - base.offsetY) / base.height * this.snapshot.height;
+    return rawX >= 0 && rawX < this.snapshot.width && rawY >= 0 && rawY < this.snapshot.height;
   }
 
   private mapMouseButton(button: number): number {
@@ -340,6 +373,7 @@ export struct RemoteDesktopSurface {
     this.requestedDesktopWidth = 0;
     this.requestedDesktopHeight = 0;
     this.desktopResizeRetries = 0;
+    this.desktopResizeRetryDelayMs = kDesktopResizeRetryBaseDelayMs;
     this.scheduleViewportDesktopResize();
   }
 
@@ -383,6 +417,7 @@ export struct RemoteDesktopSurface {
     // The surface area is in vp; the remote desktop is in pixels. The width
     // is rounded to an even value (the display control channel does that to
     // every layout anyway) and both stay inside the range the protocol allows.
+    const pixelsPerVp: number = this.getUIContext().vp2px(1);
     let width = Math.round(this.getUIContext().vp2px(this.surfaceWidth));
     let height = Math.round(this.getUIContext().vp2px(this.surfaceHeight));
     if (width < 200 || height < 200) {
@@ -393,11 +428,17 @@ export struct RemoteDesktopSurface {
     width -= width % 2;
     height -= height % 2;
 
+    // The layout carries this so the server scales the desktop to the same
+    // logical size as the viewport; at 100% a 3254 px desktop on a 288 dpi
+    // panel renders Windows far too small.
+    this.deviceScalePercent = Math.max(100, Math.min(500, Math.round(pixelsPerVp * 100)));
+
     if (width === this.requestedDesktopWidth && height === this.requestedDesktopHeight) {
       return;
     }
 
     this.desktopResizeRetries = 0;
+    this.desktopResizeRetryDelayMs = kDesktopResizeRetryBaseDelayMs;
     this.desktopResizeUnsupportedNotified = false;
     this.sendDesktopResizeRequest(width, height);
   }
@@ -413,8 +454,9 @@ export struct RemoteDesktopSurface {
     this.requestedDesktopWidth = width;
     this.requestedDesktopHeight = height;
     console.info(`FreeRDP: viewport ${Math.round(this.surfaceWidth)}x${Math.round(this.surfaceHeight)} vp` +
-      ` -> desktop ${width}x${height} px (current ${this.snapshot.width}x${this.snapshot.height})`);
-    this.onRequestDesktopSize(width, height);
+      ` -> desktop ${width}x${height} px at ${this.deviceScalePercent}%` +
+      ` (current ${this.snapshot.width}x${this.snapshot.height})`);
+    this.onRequestDesktopSize(width, height, this.deviceScalePercent);
     this.scheduleDesktopResizeRetry();
   }
 
@@ -422,7 +464,9 @@ export struct RemoteDesktopSurface {
    * A monitor layout sent right after the channel comes up is not always
    * applied: the server may still be finishing the session setup and drop it
    * silently. Keep asking, at a pace that cannot flood the channel, until the
-   * desktop reports the requested size.
+   * desktop reports the requested size. The delay grows with each attempt: a
+   * refused layout used to be retried six times at a fixed 1.2 s, and every
+   * attempt makes Windows rebuild the taskbar.
    */
   private scheduleDesktopResizeRetry(): void {
     if (this.desktopResizeRetryTimer >= 0) {
@@ -458,9 +502,11 @@ export struct RemoteDesktopSurface {
         return;
       }
       this.desktopResizeRetries += 1;
-      this.onRequestDesktopSize(width, height);
+      this.desktopResizeRetryDelayMs = Math.min(kDesktopResizeRetryMaxDelayMs,
+        Math.round(this.desktopResizeRetryDelayMs * 1.6));
+      this.onRequestDesktopSize(width, height, this.deviceScalePercent);
       this.scheduleDesktopResizeRetry();
-    }, 1200);
+    }, this.desktopResizeRetryDelayMs);
   }
 
   private clearDesktopResizeTimers(): void {
@@ -1190,6 +1236,16 @@ export struct RemoteDesktopSurface {
     } catch (error) {
       console.error(`RemoteDesktopSurface refreshPixelMap failed: ${JSON.stringify(error)}`);
     }
+  }
+
+  // True when the desktop on screen is the size this view asked for. Used to
+  // decide between "follow the viewport" and "map pixels one to one".
+  private isDesktopSettled(): boolean {
+    if (this.requestedDesktopWidth <= 0 || this.requestedDesktopHeight <= 0) {
+      return false;
+    }
+    return Math.abs(this.snapshot.width - this.requestedDesktopWidth) <= 2 &&
+      Math.abs(this.snapshot.height - this.requestedDesktopHeight) <= 2;
   }
 
   private isNativeSurfaceActive(): boolean {

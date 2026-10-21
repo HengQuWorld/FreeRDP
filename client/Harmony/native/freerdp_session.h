@@ -72,7 +72,11 @@ class FreeRDPHarmonySession {
   // Asks the server to lay the remote desktop out at this size. The request is
   // sent once the display control channel has announced its capabilities; on
   // servers without it the call is a no-op and the existing desktop stays.
-  bool ResizeDesktop(std::uint32_t width, std::uint32_t height);
+  // deviceScalePercent is the view's px-per-vp ratio in percent (180 on a 1.8x
+  // display); the layout carries it so the server draws the desktop at the same
+  // logical size the user sees, instead of 100%. Zero keeps the previous value.
+  bool ResizeDesktop(std::uint32_t width, std::uint32_t height,
+                     std::uint32_t deviceScalePercent);
   bool SendKeyScancode(std::uint32_t scancode, bool down);
   bool SendUnicodeKey(std::uint16_t codepoint, bool down);
   void SubmitAuth(const std::string& username, const std::string& password, const std::string& domain);
@@ -96,7 +100,9 @@ class FreeRDPHarmonySession {
   // published by the channel when it connects; caps arrive once the server
   // answered, and only then may a monitor layout be sent.
   void SetDispContext(void* disp);
-  void MarkDisplayControlReady(std::uint32_t maxNumMonitors);
+  void MarkDisplayControlReady(std::uint32_t maxNumMonitors,
+                               std::uint32_t maxMonitorAreaFactorA,
+                               std::uint32_t maxMonitorAreaFactorB);
   std::string GetLocalClipboardText() const;
   bool SendClipboardFormatList();
   bool SendClipboardDataRequest(std::uint32_t formatId);
@@ -142,15 +148,22 @@ class FreeRDPHarmonySession {
   // Pins the native buffer geometry to the RDP desktop size. Requires mutex_ to
   // be held. Returns true when the window is bound to the requested size.
   bool EnsureNativeWindowGeometryLocked(std::uint32_t width, std::uint32_t height);
+  // Adopts a desktop size announced by the server. Requires mutex_ to be held.
+  void AdoptDesktopSizeLocked(std::uint32_t width, std::uint32_t height);
+  // Emits one line with the measured presentation cost and resets the sample.
+  // Requires mutex_ to be held.
+  void FlushPresentStatsLocked();
+  // Repaints the desktop FreeRDP already holds into the freshly allocated
+  // surface buffers. Runs on the session thread, which is also the only writer
+  // of the GDI buffer, so the pixels cannot change underneath it.
+  void RepaintFromGdi();
   // True when a dequeued buffer still carrying the previous geometry may reset
   // and re-apply that geometry. Paced so a resize cannot turn into one
   // abort/SET_BUFFER_GEOMETRY pair per frame. Requires mutex_ to be held.
   bool CanReapplyNativeGeometryLocked(std::int64_t nowMs);
-  // Writes the current frame into a native buffer and flushes it. Requires
-  // mutex_ to be held.
+  // Writes the current frame into a native buffer and flushes it, declaring the
+  // whole written area. Requires mutex_ to be held.
   void PresentToNativeWindowLocked(std::uint32_t width, std::uint32_t height,
-                                   std::uint32_t left, std::uint32_t top,
-                                   std::uint32_t dirtyWidth, std::uint32_t dirtyHeight,
                                    const std::uint8_t* data, std::uint32_t stride);
   void ThreadMain();
   void ThreadMainWithRetry();
@@ -181,6 +194,46 @@ class FreeRDPHarmonySession {
   void* disp_;
   bool displayControlReady_;
   freerdp_harmony::DesktopResizeQueue desktopResize_;
+  // Collapses a layout the view asks for twice inside one layout tick. Every
+  // layout that reaches the server makes Windows rebuild the desktop, and the
+  // shell replays its taskbar animation each time.
+  freerdp_harmony::DesktopResizeGate desktopResizeGate_;
+  // Monitor area budget the server announced with its caps. Recorded for the
+  // log: the protocol comment in this tree does not define the two factors
+  // precisely enough to enforce them without risking a rejected auto fit.
+  std::uint32_t maxMonitorAreaFactorA_;
+  std::uint32_t maxMonitorAreaFactorB_;
+  // The view's px-per-vp ratio in percent, sent with every layout so the server
+  // scales the desktop to the same logical size the viewport has.
+  std::uint32_t deviceScalePercent_;
+  // Desktop size the server last announced. Frames that disagree with it right
+  // after the announcement are pre-resize frames and must not pin the buffer
+  // geometry back to the old size.
+  std::uint32_t desktopWidth_;
+  std::uint32_t desktopHeight_;
+  std::int64_t desktopSizeUpdatedMs_;
+  // Set when the view changed the size it draws into: the compositor gave the
+  // surface new buffers, which are empty until something paints them.
+  bool repaintRequested_;
+  // Pre-resize frames discarded since the session started. Reported once at
+  // teardown: a nonzero value explains a picture that briefly disagreed with
+  // the announced desktop size.
+  std::uint64_t staleFrameDrops_;
+  // Frames that never reached the compositor, over the current sample window
+  // and over the whole session. The periodic line shows whether drops are
+  // happening while the user watches; the teardown line shows the total.
+  std::uint64_t droppedPresentFrames_;
+  std::uint64_t droppedPresentTotal_;
+  // Presentation cost, sampled. "The desktop is slow" is either "the server
+  // sent few frames" or "we spent the frame budget copying": the two have
+  // completely different fixes, and only a measurement tells them apart.
+  std::uint64_t presentFrames_;
+  std::uint64_t presentBytes_;
+  std::uint64_t presentCopyUs_;
+  std::uint64_t presentFlushUs_;
+  std::uint64_t presentWaitUs_;
+  std::uint64_t presentMaxUs_;
+  std::int64_t presentStatsSinceMs_;
   // Desktop size the UI was last told about. UpdateSnapshot may already have
   // moved the snapshot forward (a server resize does that before the next
   // frame), so the size the UI still shows has to be tracked on its own or it
@@ -210,6 +263,12 @@ class FreeRDPHarmonySession {
   // Geometry is re-applied on every frame until it sticks, so a failure is
   // reported once instead of once per frame.
   bool warnedGeometryFailure_;
+  // A buffer fence that never signals drops every frame; report it once per
+  // surface binding rather than once per frame.
+  bool warnedFenceFailure_;
+  // Pre-resize frames are dropped in a burst after every resize; one line per
+  // resize keeps that visible without flooding hilog.
+  bool warnedStaleFrame_;
   // Timestamp of the last paced SET_BUFFER_GEOMETRY re-apply, in milliseconds;
   // negative until the first one.
   std::int64_t lastGeometryReapplyMs_ = -1;

@@ -116,7 +116,8 @@ class FreeRDPHarmonyAdapter {
   bool SendMouseButton(int sessionId, std::uint16_t x, std::uint16_t y, std::uint16_t buttonFlags,
                        bool down);
   bool SendMouseWheel(int sessionId, std::uint16_t x, std::uint16_t y, std::int16_t delta);
-  bool ResizeDesktop(int sessionId, std::uint32_t width, std::uint32_t height);
+  bool ResizeDesktop(int sessionId, std::uint32_t width, std::uint32_t height,
+                     std::uint32_t deviceScalePercent);
   bool SendKeyScancode(int sessionId, std::uint32_t scancode, bool down);
   bool SendUnicodeKey(int sessionId, std::uint16_t codepoint, bool down);
   bool SubmitAuth(int sessionId, const std::string& username, const std::string& password, const std::string& domain);

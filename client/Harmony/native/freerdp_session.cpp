@@ -2,7 +2,6 @@
 
 #include "cancellation_noise.h"
 #include "command_line_redaction.h"
-#include "native_window_damage.h"
 #include "native_window_geometry.h"
 
 #include <algorithm>
@@ -14,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <sstream>
 #include <utility>
 
@@ -21,6 +21,7 @@
 #include <native_window/external_window.h>
 #include <native_buffer/native_buffer.h>
 #include <native_buffer/buffer_common.h>
+#include <poll.h>
 #include <unistd.h>
 #include <freerdp/client.h>
 #include <freerdp/client/channels.h>
@@ -167,12 +168,52 @@ static const char* FailureMessageKey(std::uint32_t lastError) {
   }
 }
 
-// Monotonic milliseconds, used to pace work that must not repeat every frame.
-// steady_clock cannot jump backwards when the wall clock is adjusted.
+// RequestBuffer waits for a buffer the compositor has released. Its default
+// timeout is 3000 ms and the call runs on the RDP session thread, which is also
+// the thread reading the socket - see SetSurfaceId for why that is fatal.
+constexpr int32_t kNativeWindowRequestTimeoutMs = 20;
+
+// How long the acquire fence of a dequeued buffer may take to signal before the
+// frame is dropped. A fence that is slow means the consumer is behind; waiting
+// longer only stalls the session thread further.
+constexpr int kBufferFenceTimeoutMs = 50;
+
 static std::int64_t NowMilliseconds() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+static std::int64_t NowMicroseconds() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+// Waits for the acquire fence that came with a dequeued buffer: it signals once
+// the compositor has finished reading that buffer.
+//
+// The fence used to be closed and never waited on, so the memcpy below raced
+// the consumer. On a GPU-composited device that shows as tearing, half-drawn
+// frames and stale tiles; on an emulator, where composition is effectively
+// synchronous, the same code looks correct - which is why this only ever
+// reproduced on the 2-in-1. OH_NativeBuffer_MapWaitFence would do the same, but
+// it is newer than the API level this module builds against.
+static bool WaitForBufferFence(int fenceFd, int timeoutMs) {
+  if (fenceFd < 0) {
+    return true;
+  }
+  struct pollfd descriptor = {};
+  descriptor.fd = fenceFd;
+  descriptor.events = POLLIN;
+  int ret = 0;
+  do {
+    ret = poll(&descriptor, 1, timeoutMs);
+  } while ((ret < 0) && (errno == EINTR));
+  if (ret <= 0) {
+    return false;
+  }
+  return (descriptor.revents & (POLLIN | POLLERR | POLLHUP)) != 0;
 }
 
 
@@ -496,15 +537,14 @@ static void HarmonyCliprdrUninit(FreeRDPHarmonySession* session, CliprdrClientCo
 static UINT HarmonyDisplayControlCaps(DispClientContext* disp, UINT32 maxNumMonitors,
                                       UINT32 maxMonitorAreaFactorA,
                                       UINT32 maxMonitorAreaFactorB) {
-  WINPR_UNUSED(maxMonitorAreaFactorA);
-  WINPR_UNUSED(maxMonitorAreaFactorB);
   if ((disp == nullptr) || (disp->custom == nullptr)) {
     return ERROR_INVALID_PARAMETER;
   }
 
   FreeRDPHarmonySession* session =
       reinterpret_cast<FreeRDPHarmonySession*>(disp->custom);
-  session->MarkDisplayControlReady(maxNumMonitors);
+  session->MarkDisplayControlReady(maxNumMonitors, maxMonitorAreaFactorA,
+                                   maxMonitorAreaFactorB);
   return CHANNEL_RC_OK;
 }
 
@@ -949,6 +989,23 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       cliprdr_(nullptr),
       disp_(nullptr),
       displayControlReady_(false),
+      maxMonitorAreaFactorA_(0),
+      maxMonitorAreaFactorB_(0),
+      deviceScalePercent_(100),
+      desktopWidth_(0),
+      desktopHeight_(0),
+      desktopSizeUpdatedMs_(-1),
+      repaintRequested_(false),
+      staleFrameDrops_(0),
+      droppedPresentFrames_(0),
+      droppedPresentTotal_(0),
+      presentFrames_(0),
+      presentBytes_(0),
+      presentCopyUs_(0),
+      presentFlushUs_(0),
+      presentWaitUs_(0),
+      presentMaxUs_(0),
+      presentStatsSinceMs_(-1),
       clipboardReady_(false),
       started_(false),
       stopRequested_(false),
@@ -960,6 +1017,8 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       nativeGeometryHeight_(0),
       warnedNativeWindowFailure_(false),
       warnedGeometryFailure_(false),
+      warnedFenceFailure_(false),
+      warnedStaleFrame_(false),
       frameBufferStale_(false),
       dialogAnswered_(false),
       dialogCancelled_(false),
@@ -1016,6 +1075,15 @@ FreeRDPHarmonySession::~FreeRDPHarmonySession() {
   if (inputEventHandle != nullptr) {
     CloseHandle(inputEventHandle);
     inputEventHandle_ = nullptr;
+  }
+
+  // One line per session: a nonzero count is the difference between "the
+  // desktop looked broken" and "frames never reached the compositor", which is
+  // the only way to tell a rendering bug from a dropped-frame bug in the field.
+  if ((droppedPresentTotal_ != 0) || (staleFrameDrops_ != 0)) {
+    HiLogInfo("presentation: dropped " + std::to_string(droppedPresentTotal_) +
+              " frame(s), discarded " + std::to_string(staleFrameDrops_) +
+              " pre-resize frame(s)");
   }
 }
 
@@ -1548,6 +1616,8 @@ void FreeRDPHarmonySession::SetSurfaceId(const std::string& surfaceIdStr) {
   lastGeometryReapplyMs_ = -1;
   warnedNativeWindowFailure_ = false;
   warnedGeometryFailure_ = false;
+  warnedFenceFailure_ = false;
+  warnedStaleFrame_ = false;
   if (surfaceIdStr.empty()) {
     // The shared buffer stops being updated while a native window is bound, so
     // it may hold a frame from before the binding. Drop it instead of letting
@@ -1577,14 +1647,36 @@ void FreeRDPHarmonySession::SetSurfaceId(const std::string& surfaceIdStr) {
   const int32_t usageRet = OH_NativeWindow_NativeWindowHandleOpt(nativeWindow_, SET_USAGE, usage);
   const int32_t formatRet = OH_NativeWindow_NativeWindowHandleOpt(
       nativeWindow_, SET_FORMAT, NATIVEBUFFER_PIXEL_FMT_BGRA_8888);
+  // The queue runs dry while the compositor is busy (a window being dragged or
+  // resized is exactly that), and RequestBuffer then blocks for its timeout -
+  // 3000 ms by default. It runs on the RDP session thread, which is also the
+  // thread that reads the socket: a few of those stalls and the server's data
+  // goes unacknowledged long enough for TCP_USER_TIMEOUT (TcpAckTimeout,
+  // 9000 ms by default) to kill the connection. That is the disconnect seen
+  // when the client window was resized. A short timeout turns the stall into a
+  // dropped frame instead, which costs one frame and nothing else.
+  const int32_t timeoutRet = OH_NativeWindow_NativeWindowHandleOpt(
+      nativeWindow_, SET_TIMEOUT, kNativeWindowRequestTimeoutMs);
   HiLogInfo("SetSurfaceId configured NativeWindow. usageRet=" + std::to_string(usageRet) +
-            " formatRet=" + std::to_string(formatRet));
+            " formatRet=" + std::to_string(formatRet) +
+            " timeoutRet=" + std::to_string(timeoutRet) + " timeoutMs=" +
+            std::to_string(kNativeWindowRequestTimeoutMs));
 
   // The surface usually arrives before the first UpdateSnapshot, so the desktop
   // size may still be unknown here. UpdateFrame re-applies the geometry once it
   // is known; see EnsureNativeWindowGeometryLocked.
   if ((snapshot_.width > 0) && (snapshot_.height > 0)) {
     EnsureNativeWindowGeometryLocked(snapshot_.width, snapshot_.height);
+  }
+
+  // A new surface brings its own empty buffers. Waiting for the server to send
+  // something leaves a black window for as long as the remote desktop is idle
+  // (a blinking caret is enough to hide it, but a still desktop stays black).
+  // Ask the session thread to paint what it already has.
+  repaintRequested_ = true;
+  HANDLE inputEventHandle = static_cast<HANDLE>(inputEventHandle_);
+  if (inputEventHandle != nullptr) {
+    SetEvent(inputEventHandle);
   }
 }
 
@@ -1617,6 +1709,62 @@ bool FreeRDPHarmonySession::EnsureNativeWindowGeometryLocked(std::uint32_t width
   return true;
 }
 
+void FreeRDPHarmonySession::AdoptDesktopSizeLocked(std::uint32_t width,
+                                                   std::uint32_t height) {
+  if ((width == 0) || (height == 0)) {
+    return;
+  }
+  if ((desktopWidth_ == width) && (desktopHeight_ == height)) {
+    return;
+  }
+  desktopWidth_ = width;
+  desktopHeight_ = height;
+  desktopSizeUpdatedMs_ = NowMilliseconds();
+}
+
+// One line every few seconds instead of per frame: enough to tell a server that
+// sends few frames from a copy that eats the frame budget, without flooding the
+// hilog ring the way a per-frame line does.
+constexpr std::int64_t kPresentStatsIntervalMs = 5000;
+
+void FreeRDPHarmonySession::FlushPresentStatsLocked() {
+  const std::int64_t nowMs = NowMilliseconds();
+  if (presentStatsSinceMs_ < 0) {
+    presentStatsSinceMs_ = nowMs;
+    return;
+  }
+  const std::int64_t elapsedMs = nowMs - presentStatsSinceMs_;
+  if (elapsedMs < kPresentStatsIntervalMs) {
+    return;
+  }
+
+  if (presentFrames_ > 0) {
+    const double frames = static_cast<double>(presentFrames_);
+    const double mbPerSecond =
+        (static_cast<double>(presentBytes_) / (1024.0 * 1024.0)) * 1000.0 /
+        static_cast<double>(elapsedMs);
+    std::ostringstream stream;
+    stream.setf(std::ios::fixed);
+    stream.precision(1);
+    stream << "present: " << frames << " frames in " << elapsedMs << " ms ("
+           << (frames * 1000.0 / static_cast<double>(elapsedMs)) << " fps, "
+           << mbPerSecond << " MB/s) request " << (presentWaitUs_ / presentFrames_)
+           << " us, copy " << (presentCopyUs_ / presentFrames_) << " us, flush "
+           << (presentFlushUs_ / presentFrames_) << " us, worst " << presentMaxUs_
+           << " us, dropped " << droppedPresentFrames_;
+    HiLogInfo(stream.str());
+  }
+
+  presentFrames_ = 0;
+  presentBytes_ = 0;
+  presentCopyUs_ = 0;
+  presentFlushUs_ = 0;
+  presentWaitUs_ = 0;
+  presentMaxUs_ = 0;
+  droppedPresentFrames_ = 0;
+  presentStatsSinceMs_ = nowMs;
+}
+
 bool FreeRDPHarmonySession::CanReapplyNativeGeometryLocked(std::int64_t nowMs) {
   if (!freerdp_harmony::CanReapplyNativeGeometry(nowMs, lastGeometryReapplyMs_)) {
     return false;
@@ -1625,13 +1773,16 @@ bool FreeRDPHarmonySession::CanReapplyNativeGeometryLocked(std::int64_t nowMs) {
   return true;
 }
 
-void FreeRDPHarmonySession::PresentToNativeWindowLocked(
-    std::uint32_t width, std::uint32_t height, std::uint32_t left, std::uint32_t top,
-    std::uint32_t dirtyWidth, std::uint32_t dirtyHeight, const std::uint8_t* data,
-    std::uint32_t stride) {
+void FreeRDPHarmonySession::PresentToNativeWindowLocked(std::uint32_t width,
+                                                        std::uint32_t height,
+                                                        const std::uint8_t* data,
+                                                        std::uint32_t stride) {
   if ((nativeWindow_ == nullptr) || (data == nullptr)) {
     return;
   }
+
+  const std::int64_t presentStartUs = NowMicroseconds();
+  std::int64_t readyUs = presentStartUs;
 
   // A surface created before the desktop size was known is sized by the view;
   // pin it to the RDP geometry before asking for a buffer, otherwise the rows
@@ -1643,11 +1794,13 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
   BufferHandle* handle = nullptr;
 
   // A buffer allocated before the geometry change can still carry the old
-  // dimensions. Re-apply the geometry and retry once; the copy below is
-  // clamped either way, so a second mismatch only costs a scaled frame. The
-  // re-apply is paced: every stale buffer used to reset the geometry, which
-  // turned a single resize into one abort/re-apply per frame until the queue
-  // drained. Frames inside the cooldown are dropped instead.
+  // dimensions. Re-apply the geometry and retry once. A buffer that still
+  // disagrees is not presented at all: the compositor scales the whole buffer
+  // into the view, so a larger buffer would show the desktop in its corner and
+  // a smaller one would be stretched - the visibly broken frame the user saw
+  // while dragging. The frame is dropped instead; the next one that does get a
+  // matching buffer repaints everything, because every flush declares the whole
+  // desktop.
   for (int attempt = 0; attempt < 2; ++attempt) {
     buffer = nullptr;
     fenceFd = -1;
@@ -1658,6 +1811,8 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
         HiLogError("UpdateFrame: NativeWindowRequestBuffer failed with ret=" +
                    std::to_string(ret));
       }
+      ++droppedPresentFrames_;
+      ++droppedPresentTotal_;
       return;
     }
 
@@ -1669,9 +1824,6 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
         (static_cast<std::uint32_t>(handle->height) == height)) {
       break;
     }
-    if (attempt == 1) {
-      break;
-    }
 
     if (fenceFd >= 0) {
       close(fenceFd);
@@ -1679,6 +1831,9 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
     }
     OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
     buffer = nullptr;
+    if (attempt == 1) {
+      break;
+    }
     if (!CanReapplyNativeGeometryLocked(NowMilliseconds())) {
       // Drop this frame rather than reset the queue again: the next one either
       // finds a buffer with the new geometry or is paced in again.
@@ -1690,6 +1845,29 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
   }
 
   if (buffer == nullptr) {
+    // Nothing reached the screen. Every flush already declares the whole
+    // desktop, so the next frame that does get through repaints all of it.
+    ++droppedPresentFrames_;
+    ++droppedPresentTotal_;
+    return;
+  }
+
+  readyUs = NowMicroseconds();
+
+  // The fence that came with the buffer signals when the compositor is done
+  // reading it. Writing before that is a race with the consumer.
+  if (!WaitForBufferFence(fenceFd, kBufferFenceTimeoutMs)) {
+    if (fenceFd >= 0) {
+      close(fenceFd);
+      fenceFd = -1;
+    }
+    OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
+    ++droppedPresentFrames_;
+    ++droppedPresentTotal_;
+    if (!warnedFenceFailure_) {
+      warnedFenceFailure_ = true;
+      HiLogError("UpdateFrame: buffer fence did not signal, frame dropped");
+    }
     return;
   }
 
@@ -1719,13 +1897,12 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
       fenceFd = -1;
     }
     OH_NativeWindow_NativeWindowAbortBuffer(nativeWindow_, buffer);
+    ++droppedPresentFrames_;
+    ++droppedPresentTotal_;
     return;
   }
 
-  // Copy the whole frame rather than just the dirty rect. Buffers cycle through
-  // a queue, so the buffer handed to us may still hold the frame from N-2; the
-  // damage region below only tells the compositor what to recompose, it does
-  // not leave the rest of the buffer intact. Only the flush region is narrowed.
+  const std::int64_t copyStartUs = NowMicroseconds();
   uint8_t* dst = static_cast<uint8_t*>(mappedAddr);
   const uint8_t* src = data;
   const uint32_t copyWidth = std::min<uint32_t>(width, static_cast<uint32_t>(handle->width)) * 4U;
@@ -1739,26 +1916,43 @@ void FreeRDPHarmonySession::PresentToNativeWindowLocked(
   }
 
   OH_NativeBuffer_Unmap(nativeBuffer);
+  const std::int64_t copyEndUs = NowMicroseconds();
   if (fenceFd >= 0) {
     close(fenceFd);
     fenceFd = -1;
   }
 
-  // Clamp the damage rect to what was actually copied. FreeRDP reports a union
-  // that a resize can already have outgrown, and an out-of-range or empty rect
-  // makes the compositor skip the flush.
-  const freerdp_harmony::FrameRect damage = freerdp_harmony::ComputeDamageRect(
-      left, top, dirtyWidth, dirtyHeight, width, height, copyWidth / 4U, copyHeight);
-
+  // Declare the whole copied area, not the frame's dirty rect.
+  //
+  // Buffers cycle through a queue, so the buffer written here is generally not
+  // the one the compositor composited last, and the compositor only recomposes
+  // the region a flush declares. Declaring just the dirty rect left every other
+  // pixel of the screen showing the previous frame: a window being moved
+  // appeared at its old and its new position alternately, frame after frame,
+  // until an unrelated repaint happened to cover the area. The copy above
+  // already rewrites all of the buffer, so this is also the honest claim.
   struct Region region;
-  struct Region::Rect dirtyRect = { static_cast<int32_t>(damage.left),
-                                    static_cast<int32_t>(damage.top), damage.width,
-                                    damage.height };
+  struct Region::Rect dirtyRect = { 0, 0, copyWidth / 4U, copyHeight };
   region.rects = &dirtyRect;
-  region.rectNumber = (damage.width > 0 && damage.height > 0) ? 1 : 0;
+  region.rectNumber = (dirtyRect.w > 0 && dirtyRect.h > 0) ? 1 : 0;
 
+  const std::int64_t flushStartUs = NowMicroseconds();
   const int32_t flushRet = OH_NativeWindow_NativeWindowFlushBuffer(nativeWindow_, buffer, -1, region);
+  const std::int64_t flushEndUs = NowMicroseconds();
+  presentFrames_ += 1;
+  presentBytes_ += static_cast<std::uint64_t>(copyHeight) *
+                   static_cast<std::uint64_t>(rowBytes);
+  presentWaitUs_ += static_cast<std::uint64_t>(readyUs - presentStartUs);
+  presentCopyUs_ += static_cast<std::uint64_t>(copyEndUs - copyStartUs);
+  presentFlushUs_ += static_cast<std::uint64_t>(flushEndUs - flushStartUs);
+  const std::uint64_t totalUs = static_cast<std::uint64_t>(flushEndUs - presentStartUs);
+  if (totalUs > presentMaxUs_) {
+    presentMaxUs_ = totalUs;
+  }
+  FlushPresentStatsLocked();
   if (flushRet != 0) {
+    // The pixels are in the buffer but the compositor was never told; the next
+    // frame declares the whole desktop again.
     if (!warnedNativeWindowFailure_) {
       warnedNativeWindowFailure_ = true;
       HiLogError("UpdateFrame: FlushBuffer failed ret=" + std::to_string(flushRet));
@@ -1778,6 +1972,33 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // A frame painted before the server announced a resize still carries the old
+  // desktop size. Presenting it would pin the native buffer geometry back to
+  // the old size a few milliseconds after the resize set the new one, and the
+  // compositor would then scale a cropped frame into the view - the stretched,
+  // misaligned picture seen while dragging. Such frames are dropped; the first
+  // frame at the announced size repaints everything.
+  {
+    const std::int64_t sinceSizeUpdate =
+        (desktopSizeUpdatedMs_ >= 0) ? (NowMilliseconds() - desktopSizeUpdatedMs_) : -1;
+    if (freerdp_harmony::IsStaleFrameSize(width, height, desktopWidth_, desktopHeight_,
+                                          sinceSizeUpdate)) {
+      staleFrameDrops_ += 1;
+      if (!warnedStaleFrame_) {
+        warnedStaleFrame_ = true;
+        HiLogInfo("UpdateFrame: dropping pre-resize frame " + std::to_string(width) + "x" +
+                  std::to_string(height) + " for desktop " + std::to_string(desktopWidth_) +
+                  "x" + std::to_string(desktopHeight_));
+      }
+      return;
+    }
+  }
+
+  // Before any announcement (first frame after connect) or after the settle
+  // window the frame itself is the authoritative size.
+  AdoptDesktopSizeLocked(width, height);
+
   // The UI sizes the surface from the desktop dimensions, so a resize still has
   // to reach it even when frames themselves are presented natively. Compare
   // against what the UI was told last: UpdateSnapshot may already have moved
@@ -1797,7 +2018,7 @@ void FreeRDPHarmonySession::UpdateFrame(std::uint32_t width, std::uint32_t heigh
     // Present straight from the RDP primary buffer: the shared frame buffer is
     // only read by ArkTS, which no longer renders while a surface is bound.
     frameBufferStale_ = true;
-    PresentToNativeWindowLocked(width, height, left, top, dirtyWidth, dirtyHeight, data, stride);
+    PresentToNativeWindowLocked(width, height, data, stride);
   } else {
     frameBuffer_.assign(data, data + requiredSize);
     frameBufferStale_ = false;
@@ -1833,6 +2054,8 @@ void FreeRDPHarmonySession::UpdateSnapshot(std::uint32_t width, std::uint32_t he
                                            std::uint32_t dirtyWidth,
                                            std::uint32_t dirtyHeight) {
   std::lock_guard<std::mutex> lock(mutex_);
+  AdoptDesktopSizeLocked(width, height);
+  warnedStaleFrame_ = false;
   EnsureNativeWindowGeometryLocked(width, height);
   snapshot_.width = width;
   snapshot_.height = height;
@@ -1932,10 +2155,44 @@ bool FreeRDPHarmonySession::ProcessInputEvents(void* inputPointer) {
   }
 
   SendPendingDesktopResize();
+
+  bool repaint = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    repaint = repaintRequested_;
+    repaintRequested_ = false;
+  }
+  if (repaint) {
+    RepaintFromGdi();
+  }
   return true;
 }
 
-bool FreeRDPHarmonySession::ResizeDesktop(std::uint32_t width, std::uint32_t height) {
+void FreeRDPHarmonySession::RepaintFromGdi() {
+  // Runs on the session thread, which is the only writer of the GDI buffer, so
+  // the pixels are stable for as long as this runs. It deliberately does not go
+  // through UpdateFrame: that path treats a frame whose size disagrees with the
+  // announced desktop as a pre-resize frame and drops it, and it would also move
+  // the announced size backwards. This is not a decoded frame - it is the
+  // desktop that is already on screen, painted into buffers that have just been
+  // reallocated for the new view.
+  // One lock for the whole thing: the context pointer must not be read before it
+  // could be taken away by a teardown, which clears context_ under mutex_.
+  std::lock_guard<std::mutex> lock(mutex_);
+  rdpContext* context = static_cast<rdpContext*>(context_);
+  if ((context == nullptr) || (context->gdi == nullptr) || (nativeWindow_ == nullptr)) {
+    return;
+  }
+  rdpGdi* gdi = context->gdi;
+  if ((gdi->primary_buffer == nullptr) || (gdi->width == 0) || (gdi->height == 0) ||
+      (gdi->stride == 0)) {
+    return;
+  }
+  PresentToNativeWindowLocked(gdi->width, gdi->height, gdi->primary_buffer, gdi->stride);
+}
+
+bool FreeRDPHarmonySession::ResizeDesktop(std::uint32_t width, std::uint32_t height,
+                                          std::uint32_t deviceScalePercent) {
   if ((width < DISPLAY_CONTROL_MIN_MONITOR_WIDTH) ||
       (width > DISPLAY_CONTROL_MAX_MONITOR_WIDTH) ||
       (height < DISPLAY_CONTROL_MIN_MONITOR_HEIGHT) ||
@@ -1945,7 +2202,15 @@ bool FreeRDPHarmonySession::ResizeDesktop(std::uint32_t width, std::uint32_t hei
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (deviceScalePercent >= 100) {
+      deviceScalePercent_ = freerdp_harmony::DesktopScaleFactorFromPercent(deviceScalePercent);
+    }
     desktopResize_.Request(width, height);
+    // The view already changed size, so the surface has new, empty buffers.
+    // Repaint the desktop FreeRDP holds before the server has even seen the
+    // request: otherwise the window stays black for the seconds the server
+    // needs to re-lay out (3.7 s measured against a Windows 11 host).
+    repaintRequested_ = true;
   }
 
   return QueueInputEvent({ InputEvent::Type::kDesktopResize, 0U, 0U, 0U, 0U, 0U });
@@ -1955,19 +2220,28 @@ void FreeRDPHarmonySession::SetDispContext(void* disp) {
   std::lock_guard<std::mutex> lock(mutex_);
   disp_ = disp;
   displayControlReady_ = false;
+  // A reconnected channel has its own desktop stack, so the duplicate window
+  // of the previous one must not swallow the first layout of this one.
+  desktopResizeGate_.Reset();
 }
 
-void FreeRDPHarmonySession::MarkDisplayControlReady(std::uint32_t maxNumMonitors) {
+void FreeRDPHarmonySession::MarkDisplayControlReady(std::uint32_t maxNumMonitors,
+                                                    std::uint32_t maxMonitorAreaFactorA,
+                                                    std::uint32_t maxMonitorAreaFactorB) {
   HANDLE inputEventHandle = nullptr;
   bool ready = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     displayControlReady_ = (disp_ != nullptr);
     ready = displayControlReady_;
+    maxMonitorAreaFactorA_ = maxMonitorAreaFactorA;
+    maxMonitorAreaFactorB_ = maxMonitorAreaFactorB;
     inputEventHandle = static_cast<HANDLE>(inputEventHandle_);
   }
 
   HiLogInfo("display control caps: maxMonitors=" + std::to_string(maxNumMonitors) +
+            " areaFactorA=" + std::to_string(maxMonitorAreaFactorA) +
+            " areaFactorB=" + std::to_string(maxMonitorAreaFactorB) +
             " ready=" + (ready ? std::string("true") : std::string("false")));
 
   // A layout requested before the caps arrived is still pending; wake the
@@ -1997,16 +2271,43 @@ void FreeRDPHarmonySession::SendPendingDesktopResize() {
       return;
     }
 
+    // The view asks for the same size twice inside one layout tick (the
+    // connected hook and the first area change both fire), and every layout
+    // that reaches the server makes Windows rebuild the desktop - the taskbar
+    // replays its icon animation each time. Collapse those duplicates.
+    if (!desktopResizeGate_.ShouldSend(target, NowMilliseconds())) {
+      HiLogInfo("display control: dropped duplicate layout " + std::to_string(target.width) +
+                "x" + std::to_string(target.height));
+      return;
+    }
+
+    // The scale factor follows the view's px-per-vp ratio, so the server draws
+    // the desktop at the same logical size the user sees instead of 100% (a
+    // 3254 px desktop on a 288 dpi panel is unreadable at 100%). A value that
+    // came from the command line / settings still wins.
+    const std::uint32_t viewScale =
+        freerdp_harmony::DesktopScaleFactorFromPercent(deviceScalePercent_);
+    const std::uint32_t settingScale =
+        freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopScaleFactor);
+    desktopScaleFactor = (settingScale > 100) ? settingScale : viewScale;
+    const std::uint32_t settingDeviceScale =
+        freerdp_settings_get_uint32(context->settings, FreeRDP_DeviceScaleFactor);
+    deviceScaleFactor = (settingDeviceScale > 100) ? settingDeviceScale : viewScale;
+
     disp = static_cast<DispClientContext*>(disp_);
     orientation = freerdp_settings_get_uint16(context->settings, FreeRDP_DesktopOrientation);
-    desktopScaleFactor =
-        freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopScaleFactor);
-    deviceScaleFactor = freerdp_settings_get_uint32(context->settings, FreeRDP_DeviceScaleFactor);
   }
 
   if ((disp == nullptr) || (disp->SendMonitorLayout == nullptr)) {
     return;
   }
+
+  // PhysicalWidth/Height are millimetres per the display control spec. Sending
+  // pixels described a 3254 px panel as 3.25 m wide and skewed the DPI
+  // heuristics Windows uses to pick a text scale. The factor is derived from
+  // the same ratio as the scale above (160 dpi is the 100% baseline).
+  const std::uint32_t physicalDpi =
+      static_cast<std::uint32_t>((160U * deviceScaleFactor) / 100U);
 
   DISPLAY_CONTROL_MONITOR_LAYOUT monitor = {};
   monitor.Flags = DISPLAY_CONTROL_MONITOR_PRIMARY;
@@ -2014,8 +2315,8 @@ void FreeRDPHarmonySession::SendPendingDesktopResize() {
   monitor.Top = 0;
   monitor.Width = target.width;
   monitor.Height = target.height;
-  monitor.PhysicalWidth = target.width;
-  monitor.PhysicalHeight = target.height;
+  monitor.PhysicalWidth = freerdp_harmony::PhysicalSizeMm(target.width, physicalDpi);
+  monitor.PhysicalHeight = freerdp_harmony::PhysicalSizeMm(target.height, physicalDpi);
   monitor.Orientation = orientation;
   monitor.DesktopScaleFactor = desktopScaleFactor;
   monitor.DeviceScaleFactor = deviceScaleFactor;
@@ -2028,7 +2329,10 @@ void FreeRDPHarmonySession::SendPendingDesktopResize() {
   }
 
   HiLogInfo("display control: requested desktop " + std::to_string(target.width) + "x" +
-            std::to_string(target.height));
+            std::to_string(target.height) + " physical " +
+            std::to_string(monitor.PhysicalWidth) + "x" +
+            std::to_string(monitor.PhysicalHeight) + "mm scale " +
+            std::to_string(monitor.DesktopScaleFactor) + "%");
 }
 
 bool FreeRDPHarmonySession::EnsureContext() {

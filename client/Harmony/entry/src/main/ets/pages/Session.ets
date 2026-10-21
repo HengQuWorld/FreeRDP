@@ -347,8 +347,9 @@ struct Session {
         onMouseMove: async (x: number, y: number) => {
           await sessionManager.sendMouseMove(this.sessionId, x, y);
         },
-        onRequestDesktopSize: async (width: number, height: number) => {
-          await sessionManager.resizeDesktop(this.sessionId, width, height);
+        onRequestDesktopSize: async (width: number, height: number,
+                                     deviceScalePercent: number) => {
+          await sessionManager.resizeDesktop(this.sessionId, width, height, deviceScalePercent);
         },
         onDesktopResizeUnsupported: () => {
           this.showToast(i18n.get(this.appLanguage, 'session.desktop_resize_unsupported'), false);

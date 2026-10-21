@@ -53,7 +53,8 @@ export interface SessionBackend {
   submitCert(sessionId: number, accept: boolean): Promise<void>;
   setClipboardText(sessionId: number, text: string): Promise<void>;
   sendMouseMove(sessionId: number, x: number, y: number): Promise<void>;
-  resizeDesktop(sessionId: number, width: number, height: number): Promise<void>;
+  resizeDesktop(sessionId: number, width: number, height: number,
+                deviceScalePercent: number): Promise<void>;
   sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number, down: boolean): Promise<void>;
   sendMouseWheel(sessionId: number, x: number, y: number, delta: number): Promise<void>;
   sendKeyScancode(sessionId: number, scancode: number, down: boolean): Promise<void>;
@@ -405,7 +406,8 @@ class NativeSessionBackendImpl implements SessionBackend {
     this.requireNativeOk(nativeSendMouseMove(sessionId, x, y), 'sendMouseMove');
   }
 
-  async resizeDesktop(sessionId: number, width: number, height: number): Promise<void> {
+  async resizeDesktop(sessionId: number, width: number, height: number,
+                      deviceScalePercent: number): Promise<void> {
     // Best effort: the view asks on a timer and may outlive the session by a
     // few milliseconds. There is nothing to do for a session that is gone, and
     // a refused request only means the server cannot resize right now (no
@@ -414,7 +416,7 @@ class NativeSessionBackendImpl implements SessionBackend {
     if (this.findSession(sessionId) === null) {
       return;
     }
-    nativeResizeDesktop(sessionId, width, height);
+    nativeResizeDesktop(sessionId, width, height, deviceScalePercent);
   }
 
   async sendMouseButton(sessionId: number, x: number, y: number, buttonFlags: number,

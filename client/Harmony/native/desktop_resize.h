@@ -66,6 +66,96 @@ inline bool ShouldPublishDesktopSize(const DesktopSize& published, const Desktop
   return (published.width != frame.width) || (published.height != frame.height);
 }
 
+// Every layout that reaches the server costs the user a visible rebuild: the
+// Windows shell re-lays out the taskbar and replays its icon animation. The
+// view asks again on a retry timer whenever the desktop has not reported the
+// requested size yet, so every retry inside the server's apply latency used to
+// re-tear the desktop down. Measured against the real server: a requested
+// layout took 3.7 s to be applied. The window therefore has to outlast the
+// apply latency, not merely one layout tick.
+constexpr std::int64_t kDuplicateResizeWindowMs = 4000;
+
+class DesktopResizeGate {
+ public:
+  // True when this request should go on the wire now. A size equal to the last
+  // one sent is suppressed inside kDuplicateResizeWindowMs; a different size
+  // always passes, because the user has moved the window again.
+  bool ShouldSend(const DesktopSize& target, std::int64_t nowMs) {
+    if (sent_ && (target.width == lastSent_.width) && (target.height == lastSent_.height) &&
+        (nowMs >= lastSentMs_) && ((nowMs - lastSentMs_) < kDuplicateResizeWindowMs)) {
+      return false;
+    }
+    lastSent_ = target;
+    lastSentMs_ = nowMs;
+    sent_ = true;
+    return true;
+  }
+
+  // A layout sent before a disconnect must not suppress the same layout on the
+  // next session, which has its own desktop stack.
+  void Reset() {
+    lastSent_ = DesktopSize{};
+    lastSentMs_ = -1;
+    sent_ = false;
+  }
+
+ private:
+  DesktopSize lastSent_;
+  std::int64_t lastSentMs_ = -1;
+  bool sent_ = false;
+};
+
+// DISPLAY_CONTROL_MONITOR_LAYOUT carries the monitor size in millimetres.
+// Sending pixels there told the server that a 3254 px wide panel is 3.25 m
+// wide, which skews the DPI heuristics Windows uses to pick a text scale.
+inline std::uint32_t PhysicalSizeMm(std::uint32_t pixels, std::uint32_t dpi) {
+  if ((pixels == 0) || (dpi == 0)) {
+    return 0;
+  }
+  const std::uint64_t millimetres =
+      (static_cast<std::uint64_t>(pixels) * 254U) / (static_cast<std::uint64_t>(dpi) * 10U);
+  if (millimetres == 0) {
+    return 1;
+  }
+  return static_cast<std::uint32_t>(millimetres);
+}
+
+// The percentage the server scales the remote desktop by. The view reports its
+// px-per-vp ratio, and the resulting logical desktop then matches the viewport
+// in vp: a 180% factor on a 3254 px wide desktop yields the 1808 vp the user
+// actually sees, instead of a desktop drawn at 100% and shrunk to fit.
+inline std::uint32_t DesktopScaleFactorFromPercent(std::uint32_t deviceScalePercent) {
+  if (deviceScalePercent == 0) {
+    return 100;
+  }
+  return deviceScalePercent > 500 ? 500 : deviceScalePercent;
+}
+
+// A frame produced before a desktop resize still reports the old desktop size.
+// The native buffer geometry follows the frame that is being presented, so such
+// a frame pins the geometry back to the old size a few milliseconds after the
+// resize set the new one - the compositor then shows one stretched, misaligned
+// frame before the next one corrects it. Frames that disagree with the size the
+// server just announced are dropped while that size is still fresh; after the
+// window the frame is trusted again, so a resize that never announced itself
+// cannot freeze the picture.
+constexpr std::int64_t kDesktopSizeSettleMs = 1000;
+
+inline bool IsStaleFrameSize(std::uint32_t frameWidth, std::uint32_t frameHeight,
+                             std::uint32_t desktopWidth, std::uint32_t desktopHeight,
+                             std::int64_t sinceSizeUpdateMs) {
+  if ((desktopWidth == 0) || (desktopHeight == 0)) {
+    return false;  // nothing authoritative to disagree with
+  }
+  if ((frameWidth == desktopWidth) && (frameHeight == desktopHeight)) {
+    return false;
+  }
+  if ((sinceSizeUpdateMs < 0) || (sinceSizeUpdateMs >= kDesktopSizeSettleMs)) {
+    return false;  // the announcement is old: trust the frame
+  }
+  return true;
+}
+
 }  // namespace freerdp_harmony
 
 #endif  // FREERDP_HARMONY_DESKTOP_RESIZE_H

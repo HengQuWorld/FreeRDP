@@ -860,16 +860,19 @@ napi_value ResizeDesktopNapi(napi_env env, napi_callback_info info) {
   std::int32_t sessionId = 0;
   std::int32_t width = 0;
   std::int32_t height = 0;
-  if (!GetThreeInt32Args(env, info, &sessionId, &width, &height)) {
+  std::int32_t deviceScalePercent = 0;
+  if (!GetFourInt32Args(env, info, &sessionId, &width, &height, &deviceScalePercent)) {
     return nullptr;
   }
   if ((width <= 0) || (height <= 0)) {
     return CreateBoolean(env, false);
   }
 
-  return CreateBoolean(env, harmony_session_resize_desktop(
-                                sessionId, static_cast<std::uint32_t>(width),
-                                static_cast<std::uint32_t>(height)) == 0);
+  return CreateBoolean(
+      env, harmony_session_resize_desktop(
+               sessionId, static_cast<std::uint32_t>(width),
+               static_cast<std::uint32_t>(height),
+               deviceScalePercent < 0 ? 0U : static_cast<std::uint32_t>(deviceScalePercent)) == 0);
 }
 
 napi_value SendMouseMoveNapi(napi_env env, napi_callback_info info) {
@@ -1218,8 +1221,9 @@ int harmony_session_send_unicode_key(int sessionId, uint16_t codepoint, uint8_t 
   return Adapter().SendUnicodeKey(sessionId, codepoint, down != 0) ? 0 : -1;
 }
 
-int harmony_session_resize_desktop(int sessionId, uint32_t width, uint32_t height) {
-  return Adapter().ResizeDesktop(sessionId, width, height) ? 0 : -1;
+int harmony_session_resize_desktop(int sessionId, uint32_t width, uint32_t height,
+                                   uint32_t deviceScalePercent) {
+  return Adapter().ResizeDesktop(sessionId, width, height, deviceScalePercent) ? 0 : -1;
 }
 
 int harmony_session_set_surface_id(int sessionId, const char* surfaceId) {

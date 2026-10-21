@@ -113,6 +113,76 @@ int main() {
            "no second event for the settled geometry");
   }
 
+  // Every layout that reaches the server makes Windows rebuild the desktop, so
+  // the duplicate the view sends inside one layout tick must not go on the
+  // wire; the later retry of the same size still has to.
+  {
+    freerdp_harmony::DesktopResizeGate gate;
+    Expect(gate.ShouldSend(DesktopSize{ 3254, 2362 }, 1000), "first layout sent");
+    Expect(!gate.ShouldSend(DesktopSize{ 3254, 2362 }, 1014), "duplicate 14 ms later dropped");
+    Expect(!gate.ShouldSend(DesktopSize{ 3254, 2362 }, 2200), "retry inside the apply latency dropped");
+    Expect(!gate.ShouldSend(DesktopSize{ 3254, 2362 }, 4689), "the 3.7 s retry is still a duplicate");
+    Expect(gate.ShouldSend(DesktopSize{ 3254, 2362 }, 5001), "retry after the window sent");
+    Expect(gate.ShouldSend(DesktopSize{ 1960, 1226 }, 5002), "a different size always sent");
+    Expect(!gate.ShouldSend(DesktopSize{ 1960, 1226 }, 5003), "repeat of the new size dropped");
+    gate.Reset();
+    Expect(gate.ShouldSend(DesktopSize{ 1960, 1226 }, 5004), "reconnect sends the same size again");
+  }
+
+  // The window is a lower bound on the server's apply latency: exactly at the
+  // boundary the request is due again, one millisecond earlier it is not.
+  {
+    freerdp_harmony::DesktopResizeGate gate;
+    Expect(gate.ShouldSend(DesktopSize{ 800, 600 }, 0), "gate sends the first layout");
+    Expect(!gate.ShouldSend(DesktopSize{ 800, 600 },
+                            freerdp_harmony::kDuplicateResizeWindowMs - 1),
+           "one millisecond inside the window is suppressed");
+    Expect(gate.ShouldSend(DesktopSize{ 800, 600 },
+                           freerdp_harmony::kDuplicateResizeWindowMs),
+           "the window boundary is due again");
+  }
+
+  // The protocol field is millimetres. 3254 px on a 288 dpi panel is a 287 mm
+  // wide monitor; sending 3254 there described a 3.25 m monitor.
+  {
+    const std::uint32_t mm = freerdp_harmony::PhysicalSizeMm(3254, 288);
+    Expect((mm > 280) && (mm < 292), "physical width converted to millimetres");
+    Expect(freerdp_harmony::PhysicalSizeMm(0, 288) == 0, "zero pixels has no physical size");
+    Expect(freerdp_harmony::PhysicalSizeMm(1920, 0) == 0, "unknown dpi has no physical size");
+    Expect(freerdp_harmony::PhysicalSizeMm(10, 4800) == 1, "tiny panel never rounds to zero");
+  }
+
+  // The scale the server draws at follows the view's px-per-vp ratio, so a 1.8x
+  // panel asks for 180% and the logical desktop matches the viewport in vp.
+  {
+    Expect(freerdp_harmony::DesktopScaleFactorFromPercent(180) == 180, "180% passed through");
+    Expect(freerdp_harmony::DesktopScaleFactorFromPercent(0) == 100, "unknown ratio stays 100%");
+    Expect(freerdp_harmony::DesktopScaleFactorFromPercent(900) == 500, "absurd ratio clamped");
+  }
+
+  // A frame painted before the server announced a resize carries the old size
+  // and would pin the buffer geometry back; after the settle window the frame
+  // is trusted again so a silent resize cannot freeze the picture.
+  {
+    const DesktopSize big{ 3254, 2362 };
+    Expect(freerdp_harmony::IsStaleFrameSize(1960, 1226, big.width, big.height, 8),
+           "pre-resize frame right after the announcement is stale");
+    Expect(!freerdp_harmony::IsStaleFrameSize(3254, 2362, big.width, big.height, 8),
+           "frame at the announced size is current");
+    Expect(!freerdp_harmony::IsStaleFrameSize(1960, 1226, big.width, big.height, 5000),
+           "old announcement: the frame is trusted");
+    Expect(!freerdp_harmony::IsStaleFrameSize(1960, 1226, 0, 0, 8),
+           "no authoritative size yet: the frame wins");
+    Expect(!freerdp_harmony::IsStaleFrameSize(1960, 1226, big.width, big.height, -1),
+           "no announcement recorded: the frame wins");
+    Expect(freerdp_harmony::IsStaleFrameSize(1960, 1226, big.width, big.height,
+                                             freerdp_harmony::kDesktopSizeSettleMs - 1),
+           "still inside the settle window");
+    Expect(!freerdp_harmony::IsStaleFrameSize(1960, 1226, big.width, big.height,
+                                              freerdp_harmony::kDesktopSizeSettleMs),
+           "the settle window has expired");
+  }
+
   std::cout << "\n" << (failures == 0 ? "ALL PASSED" : "SOME FAILED") << ": " << failures
             << " failures\n";
   return failures;

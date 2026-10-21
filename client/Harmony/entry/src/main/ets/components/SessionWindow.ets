@@ -26,8 +26,8 @@ export struct SessionWindow {
   getFrameBuffer: () => ArrayBuffer = (): ArrayBuffer => new ArrayBuffer(0);
   setSurfaceId: (surfaceId: string) => Promise<void> = async (_surfaceId: string): Promise<void> => {};
   onMouseMove: (x: number, y: number) => void = (_x: number, _y: number): void => {};
-  onRequestDesktopSize: (width: number, height: number) => void =
-    (_width: number, _height: number): void => {};
+  onRequestDesktopSize: (width: number, height: number, deviceScalePercent: number) => void =
+    (_width: number, _height: number, _deviceScalePercent: number): void => {};
   onDesktopResizeUnsupported: () => void = (): void => {};
   onMouseButton: (x: number, y: number, buttonFlags: number, down: boolean) => void =
     (_x: number, _y: number, _buttonFlags: number, _down: boolean): void => {};
