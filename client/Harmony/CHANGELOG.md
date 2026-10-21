@@ -3,6 +3,24 @@ Changelog
 Notable user-facing changes in the HarmonyOS client.
 App releases use the 1.x tags; upstream FreeRDP 3.x tags are unrelated.
 
+Version 1.2.3 (2026-10-21)
+
+Added
+  Connect with a server address alone. The account and password are now optional: the server asks for a sign-in only when it needs one, otherwise you go straight to the remote sign-in screen. A blank port means 3389, and the form marks which fields are optional.
+  Sign in with Enter. Pressing Enter in the password, account or domain field does the same as tapping the button, and submits once both account and password are filled in.
+  Follows the system dark mode. Pages, dialogs and the language picker turn dark with the system setting, and update immediately if it changes while the app is open. Starting in dark mode no longer flashes a white screen, and the title bar follows the system too.
+
+Improved
+  Navigation buttons respond on touch down. Zooming and panning start immediately and keep stepping while a button is held, with a pressed state so a press is visibly registered.
+  Steadier picture while the window moves. Old and new content no longer alternate, the bottom edge no longer smears, and moving the window no longer drops the connection; the Start menu and taskbar come back complete.
+  Sharper Auto fit. The desktop is aligned to whole pixels instead of being resampled, so text edges stay crisp.
+  Less work while a window resize settles. Repeated full-frame redraws are skipped until the size stops changing, lowering CPU use.
+
+Fixed
+  The desktop is the right size for the screen. The client reported a fixed 100% scale and a physical size in pixels, which drew the remote desktop unreadably small on this panel.
+  Failed connections say what actually happened. An unreachable server, a closed port and a rejected password are reported separately instead of “all security protocols failed”; cancelling the password prompt now really ends the attempt.
+  Very long passwords are no longer truncated.
+
 Version 1.2.2 (2026-10-19)
 
 Added
