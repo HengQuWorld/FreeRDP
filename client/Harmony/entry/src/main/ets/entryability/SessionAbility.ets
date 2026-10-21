@@ -89,14 +89,24 @@ export default class SessionAbility extends UIAbility {
 
       const apply = (win: Object): void => {
         this.mainWindow = win;
+        const w = win as WindowLike;
+        // The title is part of the session identity: losing it is a real fault.
         try {
-          const w = win as WindowLike;
           w.setWindowTitle?.(this.sessionTitle);
-          w.setWindowDecorVisible?.(true);
-          logger.info(LogTags.SESSION_ABILITY, `Window configured - Title: ${this.sessionTitle}`);
         } catch (e) {
-          logger.error(LogTags.SESSION_ABILITY, 'Failed to configure window', e);
+          logger.error(LogTags.SESSION_ABILITY, 'Failed to set the window title', e);
         }
+        // Changing the window chrome can be refused while the window is still
+        // being created. That used to be logged as "Failed to configure window",
+        // which reads like a broken session and pushed real failures down the
+        // log ring buffer.
+        try {
+          w.setWindowDecorVisible?.(true);
+        } catch (_e) {
+          logger.info(LogTags.SESSION_ABILITY,
+            'Window chrome not adjustable yet, keeping the default decoration');
+        }
+        logger.info(LogTags.SESSION_ABILITY, `Window configured - Title: ${this.sessionTitle}`);
       };
 
       if (mainWin) {

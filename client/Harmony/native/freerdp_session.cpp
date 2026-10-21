@@ -11,6 +11,7 @@
 #include <cinttypes>
 #include <cerrno>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -132,6 +133,38 @@ static void SecureClear(std::string& secret) {
     data[i] = 0;
   }
   secret.clear();
+}
+
+// FreeRDP error codes are MAKE_FREERDP_ERROR(class, type); printing the full
+// value lets a report be matched against the library's own error.h without the
+// log around it.
+static std::string FormatErrorCode(std::uint32_t error) {
+  char buffer[16] = { 0 };
+  std::snprintf(buffer, sizeof(buffer), "0x%08" PRIX32, error);
+  return std::string(buffer);
+}
+
+/**
+ * Picks the message key for a failure that ended the attempt ladder. Only a
+ * cause that the protocol ladder could actually have fixed may claim the ladder
+ * failed: a socket that never connected fails the same way under every /sec:
+ * value, and saying "all security protocols failed" for it sends the reader off
+ * to inspect negotiation that never ran.
+ */
+static const char* FailureMessageKey(std::uint32_t lastError) {
+  switch (lastError) {
+    case FREERDP_ERROR_CONNECT_FAILED:
+      return "error.host_unreachable";
+    case FREERDP_ERROR_TLS_CONNECT_FAILED:
+      return "error.tls_failed";
+    case FREERDP_ERROR_CONNECT_TRANSPORT_FAILED:
+      return "error.transport_failed";
+    case FREERDP_ERROR_CONNECT_LOGON_FAILURE:
+    case FREERDP_ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS:
+      return "error.logon_failure";
+    default:
+      return "error.connect_failed_all_attempts";
+  }
 }
 
 // Monotonic milliseconds, used to pace work that must not repeat every frame.
@@ -589,6 +622,9 @@ static BOOL HarmonyPostConnect(freerdp* instance) {
         freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
     const std::uint32_t height =
         freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
+    // The session exists from here on: a later teardown is a session ending,
+    // not the end of a failed attempt.
+    session->MarkEverConnected();
     session->UpdateStage(HarmonySessionStage::kConnected, 0, "session.connected");
     session->UpdateSnapshot(width, height, 0, 0, width, height);
     if ((context->gdi != nullptr) && (context->gdi->primary_buffer != nullptr)) {
@@ -610,7 +646,14 @@ static void HarmonyPostDisconnect(freerdp* instance) {
   FreeRDPHarmonySession* session = SessionFromContext(instance->context);
   const std::uint32_t lastError = freerdp_get_last_error(instance->context);
   if (session != nullptr) {
-    if (lastError != 0) {
+    // A connect that never got as far as a session is torn down after every
+    // failed attempt, and the retry ladder owns the final state. Reporting
+    // "disconnected" from here made the user see the connection end mid-retry,
+    // before the real reason was known.
+    if (!session->HasEverConnected()) {
+      // The retry ladder logs this attempt's failure and the final verdict, so
+      // staying quiet here is what keeps the log truthful without repeating it.
+    } else if (lastError != 0) {
       const char* lastErrorString = freerdp_get_last_error_string(lastError);
       std::string msg = "session.disconnected_with_error|||";
       msg += (lastErrorString != nullptr) ? lastErrorString : "unknown error";
@@ -910,6 +953,7 @@ FreeRDPHarmonySession::FreeRDPHarmonySession(HarmonySessionConfig config)
       started_(false),
       stopRequested_(false),
       disconnecting_(false),
+      everConnected_(false),
       warnedMissingNativeWindow_(false),
       nativeWindow_(nullptr),
       nativeGeometryWidth_(0),
@@ -1426,6 +1470,14 @@ void FreeRDPHarmonySession::CancelAuth() {
   dialogCancelled_ = true;
   dialogAnswered_ = true;
   dialogCV_.notify_all();
+}
+
+bool FreeRDPHarmonySession::HasEverConnected() const {
+  return everConnected_.load();
+}
+
+void FreeRDPHarmonySession::MarkEverConnected() {
+  everConnected_.store(true);
 }
 
 bool FreeRDPHarmonySession::IsAuthCancelled() const {
@@ -2602,7 +2654,9 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
         // 保存错误类型用于下一次尝试的优化
         lastErrorType_ = errorStr;
         HiLogError("Connection failed on attempt " +
-                   std::to_string(currentConnectionAttempt_ + 1) + ", error: " + errorStr);
+                   std::to_string(currentConnectionAttempt_ + 1) + "/" +
+                   std::to_string(maxConnectionAttempts_) + " (" +
+                   FormatErrorCode(lastError) + "): " + errorStr);
       }
 
       freerdp_client_stop(context);
@@ -2630,7 +2684,11 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
 
       // 检查是否还有更多尝试
       if (!PrepareNextConnectionAttempt()) {
-        UpdateStage(HarmonySessionStage::kFailed, lastError, "error.connect_failed_all_attempts");
+        const char* key = FailureMessageKey(lastError);
+        UpdateStage(HarmonySessionStage::kFailed, lastError, key);
+        HiLogError(std::string("Giving up after ") +
+                   std::to_string(currentConnectionAttempt_) + " attempt(s), reported as " + key +
+                   " (" + FormatErrorCode(lastError) + ")");
         break;
       }
       
@@ -2682,6 +2740,8 @@ void FreeRDPHarmonySession::ThreadMainWithRetry() {
 
 void FreeRDPHarmonySession::ResetConnectionAttempt() {
   currentConnectionAttempt_ = 0;
+  // A reconnect starts a new attempt ladder: nothing has connected yet.
+  everConnected_.store(false);
   lastErrorType_ = "";
   useHighPerformanceMode_ = false;
 }

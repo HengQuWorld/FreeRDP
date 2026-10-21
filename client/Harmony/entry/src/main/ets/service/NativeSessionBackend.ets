@@ -39,15 +39,6 @@ const NATIVE_STAGE_FAILED: number = 4;
 const NATIVE_STAGE_AUTH_REQUIRED: number = 5;
 const NATIVE_STAGE_CERT_REQUIRED: number = 6;
 
-// FreeRDP connect error codes (MAKE_FREERDP_ERROR(CONNECT, ...)). The native
-// layer reports the code and a generic message; these are the causes a user can
-// actually act on, so they get their own wording instead of a raw English
-// string from the library.
-const ERROR_CONNECT_TLS_FAILED: number = 0x00020008;
-const ERROR_CONNECT_TRANSPORT_FAILED: number = 0x0002000d;
-const ERROR_CONNECT_LOGON_FAILURE: number = 0x00020014;
-const ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS: number = 0x0002001b;
-
 export interface SessionBackend {
   createSession(profile: ConnectionProfile): number;
   connect(sessionId: number): Promise<SessionState>;
@@ -213,9 +204,15 @@ class NativeSessionBackendImpl implements SessionBackend {
     return i18n.get(i18n.currentLocale(), 'session.not_connected');
   }
 
+  /**
+   * Appends FreeRDP's own error text, but only when the native layer did not
+   * already name the cause. A localized reason followed by the library's
+   * generic "The connection failed." told the reader nothing and made the
+   * message look half-translated.
+   */
   private enrichMessage(sessionId: number, stage: SessionStage, nativeInfo: NativeSessionInfo,
-                        baseMessage: string): string {
-    if (nativeInfo.lastError === 0) {
+                        baseMessage: string, nativeMessageIsKey: boolean): string {
+    if (nativeInfo.lastError === 0 || nativeMessageIsKey) {
       return baseMessage;
     }
     if (stage !== SessionStage.Error && stage !== SessionStage.Disconnected) {
@@ -229,23 +226,11 @@ class NativeSessionBackendImpl implements SessionBackend {
   }
 
   /**
-   * Maps a FreeRDP connect error to a message key. An empty result means the
-   * native message already says everything the user can be told.
+   * Formats a FreeRDP error code the way its headers define it, so a log line
+   * or a message can be matched against FreeRDP's own documentation.
    */
-  private failureMessageKey(lastError: number): string {
-    if (lastError === ERROR_CONNECT_LOGON_FAILURE ||
-        lastError === ERROR_CONNECT_NO_OR_MISSING_CREDENTIALS) {
-      return 'error.logon_failure';
-    }
-    if (lastError === ERROR_CONNECT_TRANSPORT_FAILED) {
-      return 'error.transport_failed';
-    }
-    if (lastError === ERROR_CONNECT_TLS_FAILED) {
-      return 'error.tls_failed';
-    }
-    // A cancelled attempt is reported as an ordinary disconnect by the native
-    // side; its own message is already localised, so nothing to substitute.
-    return '';
+  private formatErrorCode(code: number): string {
+    return '0x' + Math.abs(code).toString(16).toUpperCase().padStart(8, '0');
   }
 
   private buildState(sessionId: number, nativeInfo: NativeSessionInfo,
@@ -259,14 +244,20 @@ class NativeSessionBackendImpl implements SessionBackend {
     const baseMessage: string = nativeInfo.message.length > 0
       ? this.translateNativeMessage(nativeInfo.message)
       : this.defaultMessage(stage);
-    // A known cause gets its own localised sentence; anything else keeps the
-    // native message plus the library error text.
-    const failureKey: string = (stage === SessionStage.Error || stage === SessionStage.Disconnected)
-      ? this.failureMessageKey(nativeInfo.lastError)
-      : '';
-    const message: string = failureKey.length > 0
-      ? i18n.get(i18n.currentLocale(), failureKey)
-      : this.enrichMessage(sessionId, stage, nativeInfo, baseMessage);
+    // The native layer decides what went wrong and says so; this only adds the
+    // numeric code, which is what makes a report diagnosable without the log.
+    const nativeMessageIsKey: boolean = nativeInfo.message.startsWith('error.') ||
+      nativeInfo.message.startsWith('session.');
+    let message: string = this.enrichMessage(sessionId, stage, nativeInfo, baseMessage,
+      nativeMessageIsKey);
+    const isFailure: boolean =
+      (stage === SessionStage.Error || stage === SessionStage.Disconnected);
+    if (isFailure && nativeInfo.lastError !== 0) {
+      const code: string = this.formatErrorCode(nativeInfo.lastError);
+      if (message.indexOf(code) < 0) {
+        message = `${message} [${code}]`;
+      }
+    }
 
     return {
       sessionId: sessionId,

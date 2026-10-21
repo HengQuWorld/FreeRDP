@@ -122,7 +122,12 @@ class SessionManagerImpl {
         this.notifyCnDiscovered(sessionId, connectedState.certCommonName);
       }
       
-      logger.info(LogTags.SESSION_MANAGER, `Session ${sessionId} connected successfully`);
+      // connect() only asks the native layer to start; the handshake runs in the
+      // background. Saying "connected" here put a success line in the log more
+      // than fifteen seconds before a socket that never connected gave up, and
+      // the real outcome then appeared to be a session that dropped itself.
+      logger.info(LogTags.SESSION_MANAGER,
+        `Session ${sessionId} connect started (stage: ${connectedState.stage})`);
     } catch (e) {
       const errorMsg: string = logger.logException(LogTags.SESSION_MANAGER, 'Connection', e);
       const friendlyMsg: string = i18n.get(i18n.currentLocale(), 'session.connect_failed');
@@ -389,6 +394,7 @@ class SessionManagerImpl {
 
     let shouldRefreshState: boolean = false;
     let shouldRefreshSnapshot: boolean = false;
+    const stageBeforePoll: SessionStage = record.state.stage;
     let index: number = 0;
     while (index < events.length) {
       const event: SessionEvent = events[index];
@@ -459,6 +465,16 @@ class SessionManagerImpl {
 
     if (shouldRefreshState || shouldRefreshSnapshot) {
       this.notifyChanged();
+    }
+
+    // One line per stage change, carrying the message the user is shown. This
+    // is the only place that can say a session is really connected, because it
+    // reads the state the native layer published after the handshake.
+    if (record.state.stage !== stageBeforePoll) {
+      const detail: string = record.state.message.length > 0
+        ? ` - ${record.state.message}` : '';
+      logger.info(LogTags.SESSION_MANAGER,
+        `Session ${sessionId} stage ${stageBeforePoll} -> ${record.state.stage}${detail}`);
     }
   }
 

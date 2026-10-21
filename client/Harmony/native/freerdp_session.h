@@ -36,6 +36,12 @@ class FreeRDPHarmonySession {
   // to end the attempt without reporting a failure.
   bool IsAuthCancelled() const;
 
+  // True once a connect attempt got far enough to create a session. Until then
+  // a teardown is the end of a failed attempt, not a session ending, and the
+  // retry ladder is the only thing that may publish a state.
+  bool HasEverConnected() const;
+  void MarkEverConnected();
+
   // True once no thread can still be running inside the session, so the caller
   // may destroy it. False while a teardown is in flight.
   bool IsTeardownComplete() const;
@@ -187,6 +193,9 @@ class FreeRDPHarmonySession {
   // session mutex is held elsewhere; taking the mutex there would deadlock.
   std::atomic<bool> stopRequested_;
   bool disconnecting_;
+  // Atomic: written by the session thread, read from FreeRDP's teardown
+  // callback, which can run on that same thread but must not take mutex_.
+  std::atomic<bool> everConnected_;
   bool warnedMissingNativeWindow_;
   std::thread worker_;
   NativeWindow* nativeWindow_;

@@ -179,7 +179,7 @@
     "error.rdp_context_unavailable": "RDP 上下文不可用",
     "error.start_client": "启动 FreeRDP 客户端失败",
     "error.connect_failed": "连接远程桌面失败",
-    "error.connect_failed_all_attempts": "所有安全协议尝试均失败，无法连接到远程桌面",
+    "error.connect_failed_all_attempts": "已尝试全部安全协议仍无法连接远程桌面",
     "error.get_event_handles": "获取远端事件句柄失败",
     "error.wait_events": "等待远端事件失败",
     "error.process_events": "处理远端事件失败",
@@ -196,8 +196,9 @@
     "error_overlay_title": "连接失败",
     "back_to_home": "返回",
     "error.logon_failure": "登录失败：用户名或密码不正确",
-    "error.transport_failed": "无法连接到远程桌面：网络传输中断",
-    "error.tls_failed": "安全连接建立失败，请检查服务端证书与加密设置",
-    "session.desktop_resize_unsupported": "远程桌面未接受自动适配的尺寸，已按原分辨率显示"
+    "error.transport_failed": "连上远程桌面后连接中断：传输层报错",
+    "error.tls_failed": "无法建立安全连接：服务端证书或加密设置不被接受",
+    "session.desktop_resize_unsupported": "远程桌面未接受自动适配的尺寸，已按原分辨率显示",
+    "error.host_unreachable": "无法连接到远程桌面：主机不可达、远程桌面端口未开放，或连接被拒绝"
   }
 }

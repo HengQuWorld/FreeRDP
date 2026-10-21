@@ -179,7 +179,7 @@
     "error.rdp_context_unavailable": "RDP context unavailable",
     "error.start_client": "Failed to start FreeRDP client",
     "error.connect_failed": "Failed to connect to remote desktop",
-    "error.connect_failed_all_attempts": "All security protocol attempts failed, unable to connect to remote desktop",
+    "error.connect_failed_all_attempts": "Could not connect to the remote desktop with any supported security protocol",
     "error.get_event_handles": "Failed to get remote event handles",
     "error.wait_events": "Failed to wait for remote events",
     "error.process_events": "Failed to process remote events",
@@ -196,8 +196,9 @@
     "error_overlay_title": "Connection Failed",
     "back_to_home": "Back",
     "error.logon_failure": "Sign-in failed: the user name or password is incorrect",
-    "error.transport_failed": "Could not reach the remote desktop: the connection was interrupted",
-    "error.tls_failed": "Could not establish the secure connection; check the server certificate and encryption settings",
-    "session.desktop_resize_unsupported": "The remote desktop did not accept the fitted size; showing its native resolution instead"
+    "error.transport_failed": "The connection was dropped after reaching the remote desktop: transport error",
+    "error.tls_failed": "Could not establish the secure connection: the server certificate or encryption settings were rejected",
+    "session.desktop_resize_unsupported": "The remote desktop did not accept the fitted size; showing its native resolution instead",
+    "error.host_unreachable": "Could not reach the remote desktop: the host is unreachable, the port is closed, or the connection was refused"
   }
 }
