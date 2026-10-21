@@ -3,9 +3,10 @@ import { RemoteDesktopSurface } from './RemoteDesktopSurface';
 import { SessionToolbar } from './SessionToolbar';
 import { ThemeColors, LightColors, DarkColors } from '../utils/ThemeConstants';
 import { i18n } from '../utils/I18n';
+import { PressRepeat } from '../utils/PressRepeat';
 
 // Hold-to-repeat for the navigation pad. A short delay keeps a single tap
-// distinct; after that the step fires at a steady rate while the finger is held.
+// distinct; until it elapses the press has already stepped once.
 const NAV_REPEAT_START_DELAY_MS: number = 300;
 const NAV_REPEAT_INTERVAL_MS: number = 80;
 const NAV_REPEAT_KEYS: string[] = ['zoomOut', 'zoomIn', 'up', 'down', 'left', 'right'];
@@ -61,42 +62,36 @@ export struct SessionWindow {
   private navPadDragStartX: number = 0;
   private navPadDragStartY: number = 0;
   private navPadInited: boolean = false;
-  private navRepeatTimers: Record<string, number> = {};
-  private navRepeatDelayTimers: Record<string, number> = {};
+  private navRepeats: Record<string, PressRepeat> = {};
+  // How many pad keys are held down. While one is, a moving finger means jitter
+  // on that key rather than an intent to drag the pad.
+  private navKeysHeld: number = 0;
 
-  private startNavRepeat(key: string, onStep: () => void): void {
-    if (this.stage !== SessionStage.Connected) return;
-    this.stopNavRepeat(key);
-    onStep();
-    this.extendChromeInteractionIfVisible();
-    this.navRepeatDelayTimers[key] = setTimeout(() => {
-      this.navRepeatDelayTimers[key] = 0;
-      this.navRepeatTimers[key] = setInterval(() => {
-        if (this.stage !== SessionStage.Connected) {
-          this.stopNavRepeat(key);
-          return;
-        }
-        onStep();
-      }, NAV_REPEAT_INTERVAL_MS);
-    }, NAV_REPEAT_START_DELAY_MS);
+  private navRepeatFor(key: string): PressRepeat {
+    let repeat: PressRepeat | undefined = this.navRepeats[key];
+    if (repeat === undefined) {
+      repeat = new PressRepeat(NAV_REPEAT_START_DELAY_MS, NAV_REPEAT_INTERVAL_MS);
+      this.navRepeats[key] = repeat;
+    }
+    return repeat;
   }
 
-  private stopNavRepeat(key: string): void {
-    const delayTimer = this.navRepeatDelayTimers[key];
-    if (delayTimer > 0) {
-      clearTimeout(delayTimer);
-    }
-    this.navRepeatDelayTimers[key] = 0;
-    const repeatTimer = this.navRepeatTimers[key];
-    if (repeatTimer > 0) {
-      clearInterval(repeatTimer);
-    }
-    this.navRepeatTimers[key] = 0;
+  private pressNavKey(key: string, onStep: () => void): void {
+    if (this.stage !== SessionStage.Connected) return;
+    this.navKeysHeld += 1;
+    this.extendChromeInteractionIfVisible();
+    this.navRepeatFor(key).start(onStep);
+  }
+
+  private releaseNavKey(key: string): void {
+    this.navKeysHeld = Math.max(0, this.navKeysHeld - 1);
+    this.navRepeatFor(key).stop();
   }
 
   private stopAllNavRepeats(): void {
+    this.navKeysHeld = 0;
     for (let i = 0; i < NAV_REPEAT_KEYS.length; i++) {
-      this.stopNavRepeat(NAV_REPEAT_KEYS[i]);
+      this.navRepeatFor(NAV_REPEAT_KEYS[i]).stop();
     }
   }
 
@@ -425,6 +420,9 @@ export struct SessionWindow {
         this.navPadDragStartX = ev.touches[0].x;
         this.navPadDragStartY = ev.touches[0].y;
       } else if (ev.type === TouchType.Move) {
+        if (this.navKeysHeld > 0) {
+          return;
+        }
         const dx = ev.touches[0].x - this.navPadDragStartX;
         const dy = ev.touches[0].y - this.navPadDragStartY;
         if (!this.navPadDragging && Math.abs(dx) + Math.abs(dy) > 8) {
@@ -446,22 +444,26 @@ export struct SessionWindow {
 
   @Builder
   private buildNavButton(key: string, label: string, onStep: () => void): void {
-    Button() {
+    Column() {
       Text(label)
         .fontSize(20)
         .fontColor(Color.White)
     }
     .width(44)
     .height(44)
-    .backgroundColor('rgba(255,255,255,0.15)')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
     .borderRadius(12)
-    .type(ButtonType.Normal)
+    .stateStyles({
+      normal: { .backgroundColor('rgba(255,255,255,0.15)') },
+      pressed: { .backgroundColor('rgba(255,255,255,0.38)') }
+    })
     .enabled(this.stage === SessionStage.Connected)
     .onTouch((ev: TouchEvent) => {
       if (ev.type === TouchType.Down) {
-        this.startNavRepeat(key, onStep);
+        this.pressNavKey(key, onStep);
       } else if (ev.type === TouchType.Up || ev.type === TouchType.Cancel) {
-        this.stopNavRepeat(key);
+        this.releaseNavKey(key);
       }
     })
   }

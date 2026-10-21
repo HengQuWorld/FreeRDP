@@ -1,5 +1,9 @@
 import { SessionStage } from '../model/SessionModels';
 import { i18n } from '../utils/I18n';
+import { PressRepeat } from '../utils/PressRepeat';
+
+const ZOOM_REPEAT_START_DELAY_MS: number = 300;
+const ZOOM_REPEAT_INTERVAL_MS: number = 80;
 
 @Component
 export struct SessionToolbar {
@@ -18,6 +22,13 @@ export struct SessionToolbar {
   onResetZoom: () => void = (): void => {};
   @Prop showNavigationPad: boolean = false;
   onToggleNavigationPad: () => void = (): void => {};
+  private zoomInRepeat: PressRepeat = new PressRepeat(ZOOM_REPEAT_START_DELAY_MS, ZOOM_REPEAT_INTERVAL_MS);
+  private zoomOutRepeat: PressRepeat = new PressRepeat(ZOOM_REPEAT_START_DELAY_MS, ZOOM_REPEAT_INTERVAL_MS);
+
+  aboutToDisappear(): void {
+    this.zoomInRepeat.stop();
+    this.zoomOutRepeat.stop();
+  }
 
   build() {
     Column({ space: 8 }) {
@@ -36,9 +47,9 @@ export struct SessionToolbar {
       .constraintSize({ maxWidth: '100%' })
 
       Row({ space: 8 }) {
-        this.buildToolbarBtn('−', () => this.onZoomOut(), false)
+        this.buildZoomBtn('−', this.zoomOutRepeat, () => this.onZoomOut())
         this.buildToolbarBtn(`${Math.round(this.zoomScale * 100)}%`, () => this.onResetZoom(), this.zoomScale > 1.05)
-        this.buildToolbarBtn('+', () => this.onZoomIn(), false)
+        this.buildZoomBtn('+', this.zoomInRepeat, () => this.onZoomIn())
         this.buildToolbarBtn(this.isFullscreen ? i18n.get(this.appLanguage, 'exit_fullscreen') : i18n.get(this.appLanguage, 'fullscreen'), () => this.onToggleFullscreen(), false)
         Button(i18n.get(this.appLanguage, 'disconnect'))
           .type(ButtonType.Normal)
@@ -65,6 +76,41 @@ export struct SessionToolbar {
     .alignItems(HorizontalAlign.Center)
     .padding({ left: 12, right: 12 })
     .margin({ bottom: this.isFullscreen ? 12 : 24 })
+  }
+
+  // Zoom steps repeat while the key is held: pressing once must act at once,
+  // and holding must keep going without a lift.
+  @Builder
+  private buildZoomBtn(label: string, repeat: PressRepeat, onStep: () => void): void {
+    Column() {
+      Text(label)
+        .fontSize(12)
+        .fontColor('#f5f5f4')
+        .maxLines(1)
+    }
+    .height(40)
+    .constraintSize({ minWidth: 68 })
+    .flexShrink(1)
+    .padding({ left: 12, right: 12 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .borderRadius(16)
+    .border({ width: 1, color: 'rgba(255,255,255,0.12)' })
+    .stateStyles({
+      normal: { .backgroundColor('rgba(255,255,255,0.08)') },
+      pressed: { .backgroundColor('rgba(255,255,255,0.28)') }
+    })
+    .enabled(this.stage === SessionStage.Connected)
+    .opacity(this.stage === SessionStage.Connected ? 1 : 0.5)
+    .onTouch((ev: TouchEvent) => {
+      if (ev.type === TouchType.Down) {
+        if (this.stage === SessionStage.Connected) {
+          repeat.start(onStep);
+        }
+      } else if (ev.type === TouchType.Up || ev.type === TouchType.Cancel) {
+        repeat.stop();
+      }
+    })
   }
 
   @Builder
